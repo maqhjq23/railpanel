@@ -32,7 +32,7 @@ export default function SettingsView({
   onUpdated: (s: ServerInfo) => void
 }) {
   const [name, setName] = useState(server.name)
-  const [startCommand, setStartCommand] = useState(server.startCommand)
+  const [description, setDescription] = useState(server.description)
   const [envText, setEnvText] = useState(
     Object.entries(server.env || {})
       .map(([k, v]) => `${k}=${v}`)
@@ -43,7 +43,7 @@ export default function SettingsView({
 
   useEffect(() => {
     setName(server.name)
-    setStartCommand(server.startCommand)
+    setDescription(server.description || '')
     setEnvText(
       Object.entries(server.env || {})
         .map(([k, v]) => `${k}=${v}`)
@@ -71,7 +71,7 @@ export default function SettingsView({
       const res = await rpc<{ server: ServerInfo }>(socket, 'servers:update', {
         id: server.id,
         name,
-        startCommand,
+        description,
         env: parseEnv(envText),
       })
       toast({ title: 'Tersimpan' })
@@ -86,7 +86,7 @@ export default function SettingsView({
   async function deleteServer() {
     try {
       await rpc(socket, 'servers:delete', { id: server.id })
-      toast({ title: 'Server dihapus' })
+      toast({ title: 'Panel dihapus' })
       onDeleted()
     } catch (e) {
       toast({ title: 'Gagal hapus', description: (e as Error).message, variant: 'destructive' })
@@ -97,42 +97,49 @@ export default function SettingsView({
     <div className="space-y-4">
       <Card className="border-zinc-800 bg-zinc-900">
         <CardHeader>
-          <CardTitle className="text-base">Konfigurasi</CardTitle>
-          <CardDescription>Nama, start command, dan environment variables server.</CardDescription>
+          <CardTitle className="text-base">Info panel</CardTitle>
+          <CardDescription>Nama dan deskripsi panel ini.</CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="space-y-2">
-            <Label htmlFor="set-name">Nama server</Label>
+            <Label htmlFor="set-name">Nama panel</Label>
             <Input
               id="set-name"
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="bg-zinc-950 border-zinc-800"
+              className="bg-zinc-950 border-zinc-800 text-zinc-100"
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="set-cmd">Start command</Label>
-            <Input
-              id="set-cmd"
-              value={startCommand}
-              onChange={(e) => setStartCommand(e.target.value)}
-              placeholder="contoh: python3 bot.py"
-              className="bg-zinc-950 border-zinc-800 font-mono text-sm"
-            />
-            <p className="text-xs text-zinc-500">Dijalankan lewat tombol Start (bash -c), cwd = folder server.</p>
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="set-env">Environment variables (satu per baris: KEY=value)</Label>
+            <Label htmlFor="set-desc">Description</Label>
             <textarea
-              id="set-env"
-              value={envText}
-              onChange={(e) => setEnvText(e.target.value)}
+              id="set-desc"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
               spellCheck={false}
-              placeholder={'TOKEN=abc123\nDEBUG=1'}
-              className="h-32 w-full resize-none rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200 outline-none focus:border-emerald-700"
+              placeholder="contoh: bot whatsapp buat auto-reply"
+              className="h-20 w-full resize-none rounded-md border border-zinc-800 bg-zinc-950 p-3 text-sm text-zinc-200 outline-none focus:border-emerald-700"
             />
-            <p className="text-xs text-zinc-500">Berlaku buat Start command DAN terminal server ini.</p>
           </div>
+        </CardContent>
+      </Card>
+
+      <Card className="border-zinc-800 bg-zinc-900">
+        <CardHeader>
+          <CardTitle className="text-base">Environment variables</CardTitle>
+          <CardDescription>
+            Berlaku buat terminal panel ini. Format satu per baris: KEY=value.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <textarea
+            id="set-env"
+            value={envText}
+            onChange={(e) => setEnvText(e.target.value)}
+            spellCheck={false}
+            placeholder={'TOKEN=abc123\nDEBUG=1'}
+            className="h-32 w-full resize-none rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200 outline-none focus:border-emerald-700"
+          />
           <Button onClick={save} disabled={saving} className="bg-emerald-600 hover:bg-emerald-500">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Simpan
           </Button>
@@ -143,25 +150,25 @@ export default function SettingsView({
         <CardHeader>
           <CardTitle className="text-base text-red-400">Zona bahaya</CardTitle>
           <CardDescription className="text-zinc-400">
-            Hapus server ini beserta SEMUA file di dalamnya, permanen.
+            Hapus panel ini beserta SEMUA file di dalamnya, permanen.
           </CardDescription>
         </CardHeader>
         <CardContent>
           <AlertDialog>
             <AlertDialogTrigger asChild>
               <Button variant="destructive">
-                <Trash2 className="h-4 w-4" /> Hapus server
+                <Trash2 className="h-4 w-4" /> Hapus panel
               </Button>
             </AlertDialogTrigger>
             <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
               <AlertDialogHeader>
                 <AlertDialogTitle>Hapus &quot;{server.name}&quot;?</AlertDialogTitle>
                 <AlertDialogDescription>
-                  Semua file di folder server ini bakal kehapus permanen. Proses yang lagi jalan dimatiin.
+                  Semua file di folder panel ini bakal kehapus permanen. Terminal yang lagi aktif juga dimatiin.
                 </AlertDialogDescription>
               </AlertDialogHeader>
               <AlertDialogFooter>
-                <AlertDialogCancel className="bg-zinc-950 border-zinc-800">Batal</AlertDialogCancel>
+                <AlertDialogCancel className="bg-zinc-950 border-zinc-800 text-zinc-100">Batal</AlertDialogCancel>
                 <AlertDialogAction onClick={deleteServer} className="bg-red-600 hover:bg-red-500">
                   Hapus permanen
                 </AlertDialogAction>

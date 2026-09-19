@@ -195,3 +195,25 @@ Stage Summary:
 
 
 
+
+---
+Task ID: 10
+Agent: Super Z (main)
+Task: Revisi RailPanel sesuai feedback user (3 tab, Start/Stop = power terminal, setting minimal, fix teks item)
+
+Work Log:
+- Feedback user: (1) panel cuma boleh 3 tab Terminal/Manager/Setting, (2) tombol Start = aktifkan/matiin TERMINAL bukan run script, (3) Setting cuma nama+description+env vars+zona bahaya, (4) teks item samarkan di background gelap
+- ROOT CAUSE teks item: <html> gak punya class "dark" → CSS var --foreground = oklch(0.145) (hampir item) dipake komponen shadcn (TabsTrigger text-foreground, Label, Input, CardTitle) di atas bg zinc gelap → fix: className="dark" di layout.tsx
+- Backend engine.mjs dirombak ke model "1 panel = 1 folder + 1 terminal": status server = terminalAlive (bukan lagi managed process); hapus total mesin runs/startRun/stopRun/appendRunLog/process:*; tambah RPC terminal:stop (SIGHUP→SIGTERM→SIGKILL 2.5s); broadcastStatus kini dari terminals map; servers:create/update pakai field description (startCommand jadi dorman utk data lama); srv:join gak kirim runLog
+- Frontend: ServerView = 3 tab (Terminal/Manager/Setting) + Start/Stop = power terminal (terminal:attach/terminal:stop) + badge TERMINAL AKTIF/MATI; TerminalView gated prop active (overlay "Terminal mati" kalau off, attach cuma saat aktif); SettingsView = Info panel (nama+description) + Environment variables + Zona bahaya; DashboardView = dialog create nama+description, kartu tampil description + badge AKTIF/MATI; hapus process-view.tsx
+- Bonus fix Manager: nama file kepotong (table max-w-0 tanpa table-fixed → w-full table-fixed + kolom berwidth) + breadcrumb "/root" diganti "/"
+- Update scripts/tp-e2e-test.mjs: create dgn description, test status running saat terminal aktif, terminal:stop → stopped, servers:update description+env
+- Test lokal: lint bersih, e2e PASS 10/10 (bun --hot di port 3003 via Caddy :81); catatan debug: XTransformPort cuma jalan lewat Caddy :81, bukan :3000 langsung
+- Deploy: railway up --ci → deployment 9875649e SUCCESS; e2e PRODUKSI PASS 10/10 via https://railpanel-production-a69c.up.railway.app (RP_WS_PATH=/socket.io, token HMAC AUTH_SECRET produksi)
+- Smoke browser produksi: login OK, dashboard 2 panel user (DanzPro + yuyh — user live pakai!), DanzPro TERMINAL AKTIF dgn aktivitas ls nyata; screenshot download/railpanel-produksi-revisi.png
+
+Stage Summary:
+- Semua 4 permintaan user terpenuhi + terverifikasi di produksi
+- Model baru: Start = nyalain PTY terminal, Stop = matiin; gak ada auto-run script lagi (run.log lama tetap dihide dari file list)
+- Data lama (store.json dgn startCommand) backward-compatible — field dorman, UI gak nampilin
+- Live: https://railpanel-production-a69c.up.railway.app — password Rpf6a7ea96

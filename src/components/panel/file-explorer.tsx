@@ -141,7 +141,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
           <ChevronRight className="h-4 w-4 rotate-180" />
         </Button>
         <div className="min-w-0 flex-1 overflow-x-auto font-mono text-sm text-zinc-400">
-          <button className="hover:text-emerald-400" onClick={() => setCwd('.')}>/root</button>
+          <button className="hover:text-emerald-400" onClick={() => setCwd('.')}>/</button>
           {crumbs.map((c, i) => (
             <span key={i}>
               {' / '}
@@ -199,7 +199,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         ) : entries.length === 0 ? (
           <p className="py-16 text-center text-sm text-zinc-600">Folder kosong — upload atau bikin file dulu.</p>
         ) : (
-          <table className="w-full text-sm">
+          <table className="w-full table-fixed text-sm">
             <tbody>
               {entries.map((e) => (
                 <tr
@@ -214,13 +214,13 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                       <FileIcon className="h-4 w-4 text-zinc-500" />
                     )}
                   </td>
-                  <td className="max-w-0 py-2 pr-2">
-                    <p className="truncate">{e.name}</p>
+                  <td className="overflow-hidden py-2 pr-2">
+                    <p className="truncate text-zinc-200">{e.name}</p>
                   </td>
-                  <td className="hidden whitespace-nowrap py-2 pr-2 text-right text-xs text-zinc-600 sm:table-cell">
+                  <td className="hidden w-20 whitespace-nowrap py-2 pr-2 text-right text-xs text-zinc-600 sm:table-cell">
                     {formatSize(e.size)}
                   </td>
-                  <td className="hidden whitespace-nowrap py-2 pr-2 text-right text-xs text-zinc-600 md:table-cell">
+                  <td className="hidden w-28 whitespace-nowrap py-2 pr-2 text-right text-xs text-zinc-600 md:table-cell">
                     {e.mtime ? formatTime(e.mtime) : ''}
                   </td>
                   <td className="w-20 py-2 pr-2 text-right">

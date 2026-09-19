@@ -5,13 +5,25 @@ import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
 import '@xterm/xterm/css/xterm.css'
 import { Badge } from '@/components/ui/badge'
+import { Power } from 'lucide-react'
 
-export default function TerminalView({ socket, serverId }: { socket: any; serverId: string }) {
+export default function TerminalView({
+  socket,
+  serverId,
+  active,
+}: {
+  socket: any
+  serverId: string
+  active: boolean
+}) {
   const containerRef = useRef<HTMLDivElement>(null)
   const [connected, setConnected] = useState(false)
-  const [ready, setReady] = useState(false)
 
   useEffect(() => {
+    if (!active) {
+      setConnected(false)
+      return
+    }
     let term: Terminal | null = null
     let disposed = false
 
@@ -52,27 +64,26 @@ export default function TerminalView({ socket, serverId }: { socket: any; server
       }
       const onClosed = ({ id }: { id: string }) => {
         if (id === serverId && term) {
-          term.write('\r\n\x1b[33m[sesi terminal berakhir — buka lagi tab ini untuk mulai sesi baru]\x1b[0m\r\n')
+          term.write('\r\n\x1b[33m[terminal dimatikan]\x1b[0m\r\n')
         }
       }
       socket.on('term:out', onOut)
       socket.on('term:closed', onClosed)
 
+      // attach = ikut room + dapet backlog (terminal udah dijamin aktif oleh prop)
       socket.emit('terminal:attach', { id: serverId }, (res: { ok: boolean; backlog?: string; pty?: boolean; error?: string }) => {
         if (disposed) return
         if (res?.ok) {
           if (res.backlog) term!.write(res.backlog)
-          else term!.writeln('\x1b[32m[RailPanel] terminal siap. selamat menggunakan.\x1b[0m')
+          else term!.writeln('\x1b[32m[RailPanel] terminal aktif. selamat menggunakan.\x1b[0m')
           setConnected(true)
         } else {
-          term!.writeln(`\x1b[31m[gagal attach: ${res?.error || 'unknown'}]\x1b[0m`)
+          term!.writeln(`\x1b[31m[gagal nyalain terminal: ${res?.error || 'unknown'}]\x1b[0m`)
         }
-        setReady(true)
       })
 
       const onResize = () => { try { fit.fit() } catch { /* */ } }
       window.addEventListener('resize', onResize)
-
       return () => {
         window.removeEventListener('resize', onResize)
       }
@@ -87,16 +98,30 @@ export default function TerminalView({ socket, serverId }: { socket: any; server
       term?.dispose()
       void cleanup
     }
-  }, [socket, serverId])
+  }, [socket, serverId, active])
+
+  if (!active) {
+    return (
+      <div className="flex h-[60vh] min-h-[360px] w-full flex-col items-center justify-center gap-3 rounded-lg border border-dashed border-zinc-800 bg-[#0c0c0f]">
+        <div className="flex h-12 w-12 items-center justify-center rounded-full bg-zinc-900">
+          <Power className="h-5 w-5 text-zinc-500" />
+        </div>
+        <p className="font-medium text-zinc-200">Terminal mati</p>
+        <p className="max-w-xs text-center text-sm text-zinc-500">
+          Tekan tombol <span className="font-semibold text-emerald-400">Start</span> di kanan atas buat nyalain terminal.
+        </p>
+      </div>
+    )
+  }
 
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <p className="text-sm text-zinc-500">
-          Shell biasa (bukan docker) — cwd: folder server. <span className="hidden sm:inline">Ctrl+C jalan, program interaktif (nano, vim) jalan.</span>
+          Shell biasa (bukan docker) — cwd: folder panel. <span className="hidden sm:inline">Ctrl+C jalan, program interaktif (nano, vim) jalan.</span>
         </p>
         <Badge variant="outline" className={connected ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-400'}>
-          {connected ? 'TERHUBUNG' : ready ? 'PUTUS' : 'MENGHUBUNGKAN...'}
+          {connected ? 'TERHUBUNG' : 'MENGHUBUNGKAN...'}
         </Badge>
       </div>
       <div

@@ -5,11 +5,10 @@ import { io, Socket } from 'socket.io-client'
 export type ServerInfo = {
   id: string
   name: string
-  startCommand: string
+  description: string
   env: Record<string, string>
   createdAt: string
-  status: 'running' | 'stopped'
-  startedAt: number | null
+  status: 'running' | 'stopped' // running = terminal aktif
   terminalAlive: boolean
 }
 

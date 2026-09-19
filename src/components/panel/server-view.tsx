@@ -7,10 +7,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { rpc, type ServerInfo } from '@/lib/panel-client'
 import TerminalView from './terminal-view'
-import ProcessView from './process-view'
 import FileExplorer from './file-explorer'
 import SettingsView from './settings-view'
-import { ArrowLeft, Octagon, Play, RotateCcw } from 'lucide-react'
+import { ArrowLeft, FolderOpen, Octagon, Play, Settings as SettingsIcon, TerminalSquare } from 'lucide-react'
 
 export default function ServerView({
   socket,
@@ -30,17 +29,17 @@ export default function ServerView({
       const list = await rpc<ServerInfo[]>(socket, 'servers:list')
       setServer(list.find((s) => s.id === serverId) || null)
     } catch (e) {
-      toast({ title: 'Gagal load server', description: (e as Error).message, variant: 'destructive' })
+      toast({ title: 'Gagal load panel', description: (e as Error).message, variant: 'destructive' })
     }
   }, [socket, serverId, toast])
 
   useEffect(() => {
-    // WAJIB: gabung room server ini biar dapet event run:status / run:out
+    // WAJIB: gabung room server ini biar dapet event run:status
     socket.emit('srv:join', { id: serverId }, () => {})
     loadList()
     const onStatus = (s: { id: string; status: string }) => {
       if (s.id !== serverId) return
-      setServer((prev) => (prev ? { ...prev, status: s.status as ServerInfo['status'] } : prev))
+      setServer((prev) => (prev ? { ...prev, status: s.status as ServerInfo['status'], terminalAlive: s.status === 'running' } : prev))
     }
     socket.on('run:status', onStatus)
     return () => {
@@ -48,27 +47,19 @@ export default function ServerView({
     }
   }, [socket, serverId, loadList])
 
+  // Start/Stop = nyalain/matiin TERMINAL (bukan run script)
   async function power(action: 'start' | 'stop') {
     setBusy(true)
     try {
-      await rpc(socket, `process:${action}`, { id: serverId })
-      toast({ title: action === 'start' ? 'Start dikirim' : 'Stop dikirim' })
+      if (action === 'start') {
+        await rpc(socket, 'terminal:attach', { id: serverId })
+        toast({ title: 'Terminal aktif' })
+      } else {
+        await rpc(socket, 'terminal:stop', { id: serverId })
+        toast({ title: 'Terminal dimatikan' })
+      }
     } catch (e) {
       toast({ title: 'Gagal', description: (e as Error).message, variant: 'destructive' })
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  async function restart() {
-    setBusy(true)
-    try {
-      await rpc(socket, 'process:stop', { id: serverId })
-      await new Promise((r) => setTimeout(r, 1200))
-      await rpc(socket, 'process:start', { id: serverId })
-      toast({ title: 'Restart dikirim' })
-    } catch (e) {
-      toast({ title: 'Gagal restart', description: (e as Error).message, variant: 'destructive' })
     } finally {
       setBusy(false)
     }
@@ -93,19 +84,14 @@ export default function ServerView({
                 variant="outline"
                 className={running ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-400'}
               >
-                {running ? 'RUNNING' : 'STOPPED'}
+                {running ? 'TERMINAL AKTIF' : 'TERMINAL MATI'}
               </Badge>
             </div>
             <div className="ml-auto flex gap-2">
               {running ? (
-                <>
-                  <Button size="sm" variant="outline" className="border-zinc-800 bg-zinc-900 hover:bg-zinc-800" disabled={busy} onClick={restart}>
-                    <RotateCcw className="h-4 w-4" /> Restart
-                  </Button>
-                  <Button size="sm" variant="destructive" disabled={busy} onClick={() => power('stop')}>
-                    <Octagon className="h-4 w-4" /> Stop
-                  </Button>
-                </>
+                <Button size="sm" variant="destructive" disabled={busy} onClick={() => power('stop')}>
+                  <Octagon className="h-4 w-4" /> Stop
+                </Button>
               ) : (
                 <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500" disabled={busy} onClick={() => power('start')}>
                   <Play className="h-4 w-4" /> Start
@@ -119,23 +105,25 @@ export default function ServerView({
       <main className="mx-auto max-w-5xl px-4 py-5">
         <Tabs defaultValue="terminal">
           <TabsList className="bg-zinc-900 border border-zinc-800">
-            <TabsTrigger value="terminal">Terminal</TabsTrigger>
-            <TabsTrigger value="proses">Log Proses</TabsTrigger>
-            <TabsTrigger value="files">File Manager</TabsTrigger>
-            <TabsTrigger value="settings">Pengaturan</TabsTrigger>
+            <TabsTrigger value="terminal" className="gap-1.5">
+              <TerminalSquare className="h-4 w-4" /> Terminal
+            </TabsTrigger>
+            <TabsTrigger value="manager" className="gap-1.5">
+              <FolderOpen className="h-4 w-4" /> Manager
+            </TabsTrigger>
+            <TabsTrigger value="setting" className="gap-1.5">
+              <SettingsIcon className="h-4 w-4" /> Setting
+            </TabsTrigger>
           </TabsList>
           <TabsContent value="terminal" className="mt-3">
-            <TerminalView socket={socket} serverId={serverId} />
+            <TerminalView socket={socket} serverId={serverId} active={!!server && running} />
           </TabsContent>
-          <TabsContent value="proses" className="mt-3">
-            <ProcessView socket={socket} serverId={serverId} />
-          </TabsContent>
-          <TabsContent value="files" className="mt-3">
+          <TabsContent value="manager" className="mt-3">
             {server && (
               <FileExplorer socket={socket} serverId={serverId} />
             )}
           </TabsContent>
-          <TabsContent value="settings" className="mt-3">
+          <TabsContent value="setting" className="mt-3">
             {server && (
               <SettingsView
                 socket={socket}

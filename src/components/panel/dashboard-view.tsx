@@ -43,7 +43,7 @@ export default function DashboardView({
   const [createOpen, setCreateOpen] = useState(false)
   const [creating, setCreating] = useState(false)
   const [name, setName] = useState('')
-  const [startCommand, setStartCommand] = useState('')
+  const [description, setDescription] = useState('')
   const [deleteTarget, setDeleteTarget] = useState<ServerInfo | null>(null)
   const { toast } = useToast()
 
@@ -52,7 +52,7 @@ export default function DashboardView({
       const list = await rpc<ServerInfo[]>(socket, 'servers:list')
       setServers(list)
     } catch (e) {
-      toast({ title: 'Gagal memuat server', description: (e as Error).message, variant: 'destructive' })
+      toast({ title: 'Gagal memuat panel', description: (e as Error).message, variant: 'destructive' })
     } finally {
       setLoading(false)
     }
@@ -61,7 +61,7 @@ export default function DashboardView({
   useEffect(() => {
     refresh()
     const onStatus = (s: { id: string; status: string }) => {
-      setServers((prev) => prev.map((v) => (v.id === s.id ? { ...v, status: s.status as ServerInfo['status'] } : v)))
+      setServers((prev) => prev.map((v) => (v.id === s.id ? { ...v, status: s.status as ServerInfo['status'], terminalAlive: s.status === 'running' } : v)))
     }
     socket.on('run:status', onStatus)
     return () => {
@@ -73,14 +73,14 @@ export default function DashboardView({
     if (!name.trim()) return
     setCreating(true)
     try {
-      const res = await rpc<{ server: ServerInfo }>(socket, 'servers:create', { name, startCommand })
-      toast({ title: 'Server dibuat', description: res.server.name })
+      const res = await rpc<{ server: ServerInfo }>(socket, 'servers:create', { name, description })
+      toast({ title: 'Panel dibuat', description: res.server.name })
       setCreateOpen(false)
       setName('')
-      setStartCommand('')
+      setDescription('')
       await refresh()
     } catch (e) {
-      toast({ title: 'Gagal bikin server', description: (e as Error).message, variant: 'destructive' })
+      toast({ title: 'Gagal bikin panel', description: (e as Error).message, variant: 'destructive' })
     } finally {
       setCreating(false)
     }
@@ -90,7 +90,7 @@ export default function DashboardView({
     if (!deleteTarget) return
     try {
       await rpc(socket, 'servers:delete', { id: deleteTarget.id })
-      toast({ title: 'Server dihapus', description: deleteTarget.name })
+      toast({ title: 'Panel dihapus', description: deleteTarget.name })
       setDeleteTarget(null)
       await refresh()
     } catch (e) {
@@ -119,44 +119,44 @@ export default function DashboardView({
 
       <main className="mx-auto max-w-5xl px-4 py-6">
         <div className="mb-4 flex items-center justify-between gap-2">
-          <h2 className="text-lg font-semibold">Server kamu ({servers.length})</h2>
+          <h2 className="text-lg font-semibold">Panel kamu ({servers.length})</h2>
           <div className="flex gap-2">
-            <Button variant="outline" size="sm" onClick={refresh} className="border-zinc-800 bg-zinc-900 hover:bg-zinc-800">
+            <Button variant="outline" size="sm" onClick={refresh} className="border-zinc-800 bg-zinc-900 text-zinc-100 hover:bg-zinc-800 hover:text-zinc-100">
               <RefreshCw className="h-4 w-4" />
               <span className="hidden sm:inline">Refresh</span>
             </Button>
             <Dialog open={createOpen} onOpenChange={setCreateOpen}>
               <DialogTrigger asChild>
                 <Button size="sm" className="bg-emerald-600 hover:bg-emerald-500">
-                  <Plus className="h-4 w-4" /> Server Baru
+                  <Plus className="h-4 w-4" /> Panel Baru
                 </Button>
               </DialogTrigger>
               <DialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
                 <DialogHeader>
-                  <DialogTitle>Bikin server baru</DialogTitle>
+                  <DialogTitle>Bikin panel baru</DialogTitle>
                   <DialogDescription>
-                    Tiap server punya folder sendiri, terminal sendiri, dan start command sendiri.
+                    Tiap panel punya folder sendiri, terminal sendiri, dan file manager sendiri.
                   </DialogDescription>
                 </DialogHeader>
                 <div className="space-y-4">
                   <div className="space-y-2">
-                    <Label htmlFor="srv-name">Nama</Label>
+                    <Label htmlFor="srv-name">Nama panel</Label>
                     <Input
                       id="srv-name"
                       value={name}
                       onChange={(e) => setName(e.target.value)}
                       placeholder="contoh: Bot WhatsApp"
-                      className="bg-zinc-950 border-zinc-800"
+                      className="bg-zinc-950 border-zinc-800 text-zinc-100"
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="srv-cmd">Start command (opsional, bisa diisi belakangan)</Label>
+                    <Label htmlFor="srv-desc">Description (opsional)</Label>
                     <Input
-                      id="srv-cmd"
-                      value={startCommand}
-                      onChange={(e) => setStartCommand(e.target.value)}
-                      placeholder="contoh: python3 bot.py"
-                      className="bg-zinc-950 border-zinc-800 font-mono text-sm"
+                      id="srv-desc"
+                      value={description}
+                      onChange={(e) => setDescription(e.target.value)}
+                      placeholder="contoh: bot buat auto-reply grup"
+                      className="bg-zinc-950 border-zinc-800 text-zinc-100"
                     />
                   </div>
                 </div>
@@ -178,12 +178,12 @@ export default function DashboardView({
           <Card className="border-dashed border-zinc-800 bg-zinc-900/40">
             <CardContent className="flex flex-col items-center justify-center py-16 text-center">
               <FolderKanban className="mb-3 h-10 w-10 text-zinc-600" />
-              <p className="font-medium">Belum ada server</p>
+              <p className="font-medium">Belum ada panel</p>
               <p className="mt-1 max-w-sm text-sm text-zinc-500">
-                Bikin server pertama lo, upload file-nya, terus jalanin lewat terminal atau start command.
+                Bikin panel pertama lo, upload file-nya di tab Manager, terus nyalain terminalnya pake tombol Start.
               </p>
               <Button onClick={() => setCreateOpen(true)} className="mt-4 bg-emerald-600 hover:bg-emerald-500">
-                <Plus className="h-4 w-4" /> Server Baru
+                <Plus className="h-4 w-4" /> Panel Baru
               </Button>
             </CardContent>
           </Card>
@@ -201,16 +201,16 @@ export default function DashboardView({
                       <span
                         className={`h-2.5 w-2.5 shrink-0 rounded-full ${s.status === 'running' ? 'bg-emerald-400 shadow-[0_0_8px] shadow-emerald-500/60' : 'bg-zinc-600'}`}
                       />
-                      <p className="truncate font-medium">{s.name}</p>
+                      <p className="truncate font-medium text-zinc-100">{s.name}</p>
                     </div>
-                    <p className="mt-1 truncate font-mono text-xs text-zinc-500">
-                      {s.startCommand || 'belum ada start command'}
+                    <p className="mt-1 truncate text-xs text-zinc-500">
+                      {s.description || 'gak ada deskripsi'}
                     </p>
                     <Badge
                       variant="outline"
                       className={`mt-2 ${s.status === 'running' ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-400'}`}
                     >
-                      {s.status === 'running' ? 'RUNNING' : 'STOPPED'}
+                      {s.status === 'running' ? 'TERMINAL AKTIF' : 'TERMINAL MATI'}
                     </Badge>
                   </div>
                   <Button
@@ -235,13 +235,13 @@ export default function DashboardView({
       <AlertDialog open={!!deleteTarget} onOpenChange={(o) => !o && setDeleteTarget(null)}>
         <AlertDialogContent className="bg-zinc-900 border-zinc-800 text-zinc-100">
           <AlertDialogHeader>
-            <AlertDialogTitle>Hapus server &quot;{deleteTarget?.name}&quot;?</AlertDialogTitle>
+            <AlertDialogTitle>Hapus panel &quot;{deleteTarget?.name}&quot;?</AlertDialogTitle>
             <AlertDialogDescription>
-              Semua file di folder server ini bakal kehapus permanen. Proses yang lagi jalan juga dimatiin.
+              Semua file di folder panel ini bakal kehapus permanen. Terminal yang lagi aktif juga dimatiin.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
-            <AlertDialogCancel className="bg-zinc-950 border-zinc-800">Batal</AlertDialogCancel>
+            <AlertDialogCancel className="bg-zinc-950 border-zinc-800 text-zinc-100">Batal</AlertDialogCancel>
             <AlertDialogAction onClick={deleteServer} className="bg-red-600 hover:bg-red-500">
               Hapus
             </AlertDialogAction>

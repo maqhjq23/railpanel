@@ -46,13 +46,14 @@ async function runMain() {
 
   socket.on('connect', async () => {
     try {
-      // 2. create server
+      // 2. create server (nama + description)
       const created = await rpc(socket, 'servers:create', {
         name: 'Tes E2E Bot',
-        startCommand: 'echo halo dari proses && sleep 60',
+        description: 'panel buat test otomatis',
       })
       const id = created.server.id
-      step('servers:create → ' + id)
+      if ((created.server.description || '') !== 'panel buat test otomatis') fail('description gak kesimpan')
+      step('servers:create + description OK → ' + id)
       await rpc(socket, 'srv:join', { id })
       step('srv:join OK')
 
@@ -84,29 +85,28 @@ async function runMain() {
       await termDone
       step('terminal: input → PTY → output OK')
 
-      // 5. managed process
-      let runOut = ''
-      const runDone = new Promise((resolve, reject) => {
-        const t = setTimeout(() => reject(new Error('run timeout, out=' + runOut)), 10000)
-        socket.on('run:out', ({ data }) => {
-          runOut += data
-          if (runOut.includes('halo dari proses')) {
-            clearTimeout(t)
-            resolve()
-          }
-        })
-      })
-      await rpc(socket, 'process:start', { id })
-      await runDone
-      const logs = await rpc(socket, 'process:logs', { id })
-      if (logs.status !== 'running') fail('status bukan running setelah start: ' + logs.status)
-      step('process:start → log streaming OK (status running)')
+      // 5. status = terminal aktif, lalu Stop = terminal mati
+      let listA = await rpc(socket, 'servers:list')
+      const alive = listA.find((s) => s.id === id)
+      if (!alive || alive.status !== 'running') fail('status harus running saat terminal aktif')
+      if (alive.terminalAlive !== true) fail('terminalAlive harus true')
+      step('status running saat terminal aktif OK')
 
-      await rpc(socket, 'process:stop', { id })
-      await new Promise((r) => setTimeout(r, 800))
-      const logs2 = await rpc(socket, 'process:logs', { id })
-      if (logs2.status === 'running') fail('masih running setelah stop')
-      step('process:stop OK')
+      await rpc(socket, 'terminal:stop', { id })
+      await new Promise((r) => setTimeout(r, 1000))
+      const listB = await rpc(socket, 'servers:list')
+      const dead = listB.find((s) => s.id === id)
+      if (!dead || dead.status !== 'stopped') fail('status harus stopped setelah terminal:stop')
+      if (dead.terminalAlive !== false) fail('terminalAlive harus false setelah stop')
+      step('terminal:stop → status stopped OK')
+
+      // 5b. servers:update description
+      await rpc(socket, 'servers:update', { id, name: 'Tes E2E Bot', description: 'deskripsi baru', env: { FOO: 'bar' } })
+      const listC = await rpc(socket, 'servers:list')
+      const upd = listC.find((s) => s.id === id)
+      if (!upd || upd.description !== 'deskripsi baru') fail('servers:update description gagal')
+      if (!upd.env || upd.env.FOO !== 'bar') fail('servers:update env gagal')
+      step('servers:update (nama/description/env) OK')
 
       // 6. cleanup + unauthorized create check
       await rpc(socket, 'servers:delete', { id })

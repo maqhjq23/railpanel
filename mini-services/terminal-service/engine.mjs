@@ -68,16 +68,11 @@ function safePath(id, rel) {
 }
 
 // ---------------- runtime state ----------------
+// Model RailPanel: 1 server = 1 folder + 1 terminal (PTY).
+// Terminal AKTIF = PTY jalan, MATI = gak ada proses. Gak ada auto-run script.
 const terminals = new Map() // id -> { proc, pty, clients:Set, backlog:string }
-const runs = new Map() // id -> { proc, startedAt, status, exitCode, log:string[] }
 
 const MAX_BACKLOG = 12 * 1024
-const MAX_LOG_LINES = 600
-
-function pushRing(arr, item, max) {
-  arr.push(item)
-  if (arr.length > max) arr.splice(0, arr.length - max)
-}
 
 function hasScriptBin() {
   return fs.existsSync('/usr/bin/script') || fs.existsSync('/bin/script') || fs.existsSync('/usr/local/bin/script')
@@ -97,16 +92,15 @@ function buildEnv(srv) {
 
 function listServersPublic() {
   return store.servers.map((s) => {
-    const run = runs.get(s.id)
+    const active = terminals.has(s.id)
     return {
       id: s.id,
       name: s.name,
-      startCommand: s.startCommand || '',
+      description: s.description || '',
       env: s.env || {},
       createdAt: s.createdAt,
-      status: run && run.status === 'running' ? 'running' : 'stopped',
-      startedAt: run && run.status === 'running' ? run.startedAt : null,
-      terminalAlive: terminals.has(s.id),
+      status: active ? 'running' : 'stopped', // running = terminal aktif
+      terminalAlive: active,
     }
   })
 }
@@ -135,80 +129,32 @@ function ensureTerminal(id) {
   proc.on('exit', () => {
     io?.to('term:' + id).emit('term:closed', { id })
     terminals.delete(id)
+    broadcastStatus(id)
   })
+  broadcastStatus(id)
   return t
 }
 
-// ---------------- managed run ----------------
+function stopTerminal(id) {
+  const t = terminals.get(id)
+  if (!t) return { ok: false, error: 'Terminal emang lagi mati' }
+  try { t.proc.kill('SIGHUP') } catch { /* */ }
+  try { t.proc.kill('SIGTERM') } catch { /* */ }
+  // jaga-jaga kalau gak mau mati juga
+  setTimeout(() => {
+    const cur = terminals.get(id)
+    if (cur === t) { try { t.proc.kill('SIGKILL') } catch { /* */ } }
+  }, 2500)
+  return { ok: true }
+}
+
+// ---------------- status broadcast ----------------
+// Status server = status terminalnya (running = terminal aktif)
 function broadcastStatus(id) {
-  const run = runs.get(id)
   io?.to('srv:' + id).emit('run:status', {
     id,
-    status: run && run.status === 'running' ? 'running' : 'stopped',
-    exitCode: run ? run.exitCode ?? null : null,
-    startedAt: run && run.status === 'running' ? run.startedAt : null,
+    status: terminals.has(id) ? 'running' : 'stopped',
   })
-}
-
-function appendRunLog(id, line) {
-  const run = runs.get(id)
-  if (run) pushRing(run.log, line, MAX_LOG_LINES)
-  try {
-    const logPath = path.join(serverDir(id), 'run.log')
-    fs.appendFileSync(logPath, line + '\n')
-    const st = fs.statSync(logPath)
-    if (st.size > 2 * 1024 * 1024) {
-      const content = fs.readFileSync(logPath, 'utf8')
-      fs.writeFileSync(logPath, content.slice(-300 * 1024))
-    }
-  } catch { /* ignore */ }
-  io?.to('srv:' + id).emit('run:out', { id, data: line })
-}
-
-function startRun(id) {
-  const srv = findServer(id)
-  if (!srv) return { ok: false, error: 'Server tidak ditemukan' }
-  if (!srv.startCommand || !srv.startCommand.trim()) return { ok: false, error: 'Start command masih kosong (isi dulu di tab Pengaturan)' }
-  const existing = runs.get(id)
-  if (existing && existing.status === 'running') return { ok: false, error: 'Proses masih jalan' }
-  const dir = serverDir(id)
-  const proc = spawn('bash', ['-c', srv.startCommand], {
-    cwd: dir,
-    env: buildEnv(srv),
-    detached: true,
-    stdio: ['ignore', 'pipe', 'pipe'],
-  })
-  const run = { proc, startedAt: Date.now(), status: 'running', exitCode: null, log: [] }
-  runs.set(id, run)
-  proc.stdout.on('data', (d) => String(d).split(/\r?\n/).filter(Boolean).forEach((l) => appendRunLog(id, l)))
-  proc.stderr.on('data', (d) => String(d).split(/\r?\n/).filter(Boolean).forEach((l) => appendRunLog(id, '[stderr] ' + l)))
-  proc.on('exit', (code, sig) => {
-    if (runs.get(id) === run) {
-      run.status = 'stopped'
-      run.exitCode = sig ? `SIG${sig}` : code
-      appendRunLog(id, `[proses berhenti — code=${run.exitCode}]`)
-      broadcastStatus(id)
-    }
-  })
-  proc.unref()
-  appendRunLog(id, `[start] $ ${srv.startCommand}`)
-  broadcastStatus(id)
-  return { ok: true }
-}
-
-function stopRun(id) {
-  const run = runs.get(id)
-  if (!run || run.status !== 'running') return { ok: false, error: 'Tidak ada proses jalan' }
-  const pid = run.proc.pid
-  try { process.kill(-pid, 'SIGTERM') } catch { try { run.proc.kill('SIGTERM') } catch { /* */ } }
-  setTimeout(() => {
-    try {
-      process.kill(-pid, 0) // masih hidup?
-      try { process.kill(-pid, 'SIGKILL') } catch { /* */ }
-    } catch { /* sudah mati */ }
-  }, 5000)
-  appendRunLog(id, `[stop] SIGTERM dikirim ke grup proses ${pid}`)
-  return { ok: true }
 }
 
 // ---------------- io instance ----------------
@@ -234,7 +180,7 @@ export function attachEngine(httpServer, opts = {}) {
       if (!findServer(id)) return cb?.({ ok: false, error: 'Server tidak ditemukan' })
       socket.join('srv:' + id)
       const t = terminals.get(id)
-      cb?.({ ok: true, terminalBacklog: t ? t.backlog : '', runLog: runs.get(id)?.log || [] })
+      cb?.({ ok: true, terminalBacklog: t ? t.backlog : '' })
       broadcastStatus(id)
     })
 
@@ -246,13 +192,13 @@ export function attachEngine(httpServer, opts = {}) {
 
     socket.on('servers:create', (data, cb) => {
       const name = String(data?.name || '').trim()
-      if (!name || name.length > 60) return cb({ ok: false, error: 'Nama server wajib (maks 60 karakter)' })
+      if (!name || name.length > 60) return cb({ ok: false, error: 'Nama panel wajib (maks 60 karakter)' })
       const id = crypto.randomBytes(6).toString('hex')
       fs.mkdirSync(serverDir(id), { recursive: true })
       store.servers.push({
         id,
         name,
-        startCommand: String(data?.startCommand || '').trim(),
+        description: String(data?.description || '').trim().slice(0, 300),
         env: data?.env && typeof data.env === 'object' ? data.env : {},
         createdAt: new Date().toISOString(),
       })
@@ -264,7 +210,7 @@ export function attachEngine(httpServer, opts = {}) {
       const srv = findServer(data?.id)
       if (!srv) return cb({ ok: false, error: 'Server tidak ditemukan' })
       if (typeof data.name === 'string' && data.name.trim()) srv.name = data.name.trim().slice(0, 60)
-      if (typeof data.startCommand === 'string') srv.startCommand = data.startCommand.trim()
+      if (typeof data.description === 'string') srv.description = data.description.trim().slice(0, 300)
       if (data.env && typeof data.env === 'object') {
         const clean = {}
         for (const [k, v] of Object.entries(data.env)) {
@@ -281,28 +227,14 @@ export function attachEngine(httpServer, opts = {}) {
       if (!srv) return cb({ ok: false, error: 'Server tidak ditemukan' })
       const t = terminals.get(id)
       if (t) { try { t.proc.kill('SIGKILL') } catch { /* */ } terminals.delete(id) }
-      const run = runs.get(id)
-      if (run && run.status === 'running') {
-        try { process.kill(-run.proc.pid, 'SIGKILL') } catch { /* */ }
-      }
-      runs.delete(id)
       try { fs.rmSync(serverDir(id), { recursive: true, force: true }) } catch { /* */ }
       store.servers = store.servers.filter((s) => s.id !== id)
       saveStore()
       cb({ ok: true })
     })
 
-    // ---- process power ----
-    socket.on('process:start', ({ id }, cb) => cb(startRun(id)))
-    socket.on('process:stop', ({ id }, cb) => cb(stopRun(id)))
-    socket.on('process:logs', ({ id }, cb) => {
-      const run = runs.get(id)
-      cb({
-        ok: true,
-        log: run ? run.log : [],
-        status: run && run.status === 'running' ? 'running' : 'stopped',
-      })
-    })
+    // ---- terminal power (Start/Stop di header) ----
+    socket.on('terminal:stop', ({ id }, cb) => cb(stopTerminal(id)))
 
     // ---- files ----
     socket.on('files:list', async ({ id, path: rel = '.' }, cb) => {
@@ -313,7 +245,7 @@ export function attachEngine(httpServer, opts = {}) {
         const entries = await fsp.readdir(target, { withFileTypes: true })
         const out = []
         for (const e of entries) {
-          if (e.name === 'run.log' && (rel === '.' || rel === '')) continue
+          if (e.name === 'run.log' && (rel === '.' || rel === '')) continue // sisa data lama
           try {
             const st = await fsp.stat(path.join(target, e.name))
             out.push({ name: e.name, type: e.isDirectory() ? 'dir' : 'file', size: st.size, mtime: st.mtimeMs })

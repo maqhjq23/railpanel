@@ -88,4 +88,24 @@ Stage Summary:
 - Root cause error user = DNS resolver HP timeout ke backboard.railway.com; solusi di sisi user: toggle jaringan / Private DNS; script sekarang auto-retry + panduan troubleshooting jelas
 - CLI 4.5.4 tidak bisa diarahkan ke endpoint lain (tidak ada env var) — terkonfirmasi dari binary
 
+---
+Task ID: 5
+Agent: Super Z (main)
+Task: Fix FINAL script Termux v4 — curl 200 tapi `railway whoami` selalu dns error (musl statis gak bisa DNS di Termux polos)
+
+Work Log:
+- Laporan user v3: preflight curl 200 (pass) tapi whoami gagal network-error 5/5 terus ("padahal pas di tes manual 200")
+- ROOT CAUSE DITEMUKAN: railway CLI = binary STATIS musl (aarch64-unknown-linux-musl) → TIDAK pakai getaddrinfo bionic/Android; musl membaca /etc/resolv.conf sendiri → di Termux polos file tidak ada → musl fallback nameserver 127.0.0.1:53 → tidak ada yang listen → timeout EAI_AGAIN "Try again". curl normal karena curl pakai DNS bionic. Konsisten 100% dengan gejala user
+- Patch v4:
+  1. Buat $PREFIX/etc/resolv.conf (8.8.8.8/8.8.4.4/1.1.1.1) di tahap dependency
+  2. chroot_rescue(): saat whoami DNS-fail percobaan ke-2 → pkg install proot → cp script ke $HOME/.wings-setup.sh → exec `termux-chroot bash` (proot map $PREFIX/etc → /etc sehingga musl bisa baca resolv.conf); kredensial dibawa otomatis via env (AUTO_FILL=1, ask() skip prompt bila var terisi; IN_CHROOT=1 mencegah loop)
+  3. warn retry kini menampilkan error asli (head -1) — menghilangkan blind spot debug
+  4. die_net + tip manual: echo nameserver ke $PREFIX/etc/resolv.conf, pkg install proot + termux-chroot
+- Test: bash -n OK; harness fake-railway (dns error selalu) → retry tampil error, rescue fired di i=2, die_net box OK, resolv.conf terbuat; real end-to-end pipe newline → EXIT=0 semua hijau (wings RUNNING, API lokal 200, publik 200)
+
+Stage Summary:
+- Deliverable final: /home/z/my-project/download/wings-termux-setup.sh v4 (chmod +x, kedua jalur tested)
+- Insight kunci utk deploy Termux: SEMUA binary statis musl (railway, dst) gak bisa DNS di Termux tanpa /etc/resolv.conf via termux-chroot — bukan masalah jaringan/token
+- Fallback manual user: pkg install proot && termux-chroot bash wings-termux-setup.sh
+
 

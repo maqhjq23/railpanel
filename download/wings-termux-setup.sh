@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # ==============================================================
-#  WINGS RAILWAY SETUP v3 — Termux Edition
+#  WINGS RAILWAY SETUP v4 — Termux Edition
 #  v3: cek DNS/internet sebelum auth + auto-retry jaringan
 #      + auto-benerin DNS (resolv-conf) + shim getconf
+#  v4: FIX UTAMA — railway CLI = binary STATIS (musl), gak pake DNS
+#      Android, dia baca /etc/resolv.conf sendiri (gak ada di Termux
+#      polos -> "dns error Try again" padahal curl normal).
+#      Fix: bikin resolv.conf + auto pindah ke termux-chroot (proot)
 #  ------------------------------------------------------------
 #  Re-install Wings + Fake Docker daemon di container panel
 #  Pterodactyl (Railway). Jalankan lagi SETIAP KALI service
@@ -45,27 +49,48 @@ die_net() {
   echo -e "     4. VPN/proxy jalan? matiin dulu, atau: ${B}export HTTPS_PROXY=http://127.0.0.1:PORT${N}"
   echo -e "     5. Tes manual: ${B}curl -s -o /dev/null -w '%{http_code}' https://backboard.railway.com/${N}"
   echo -e "        keluar angka (200/403/404) = konek, tinggal jalanin script lagi"
+  echo -e "     6. DNS binary statis: ${B}echo 'nameserver 8.8.8.8' > \$PREFIX/etc/resolv.conf${N}"
+  echo -e "     7. Manual chroot: ${B}pkg install proot && termux-chroot bash wings-termux-setup.sh${N}"
   echo
   exit 1
 }
 
+chroot_rescue() {
+  [ -n "$PREFIX" ] || return 1
+  [ "$IN_CHROOT" = "1" ] && return 1  # udah di chroot, jangan loop
+  info "Binary railway gak bisa DNS di Termux polos (binary musl statis)."
+  info "Auto pindah ke termux-chroot biar bisa baca /etc/resolv.conf..."
+  command -v termux-chroot >/dev/null 2>&1 || pkg install -y proot >/dev/null 2>&1 || true
+  command -v termux-chroot >/dev/null 2>&1 || { warn "Gagal install proot (pkg install proot)"; return 1; }
+  cp -f "$SCRIPT_PATH" "$HOME/.wings-setup.sh" 2>/dev/null || return 1
+  info "Kredensial otomatis dibawa — tunggu..."
+  sleep 1
+  exec env AUTO_FILL=1 IN_CHROOT=1 termux-chroot bash "$HOME/.wings-setup.sh"
+}
+
 ask() { # ask VAR "pertanyaan" "default"
   local v
+  if [ "$AUTO_FILL" = "1" ] && [ -n "${!1:-}" ]; then
+    return   # kredensial dibawa dari sesi sebelumnya (chroot rescue)
+  fi
   read -r -p "$(echo -e "${B}?$N $2 ${Y}[${3:-}]: ${N}")" v
   v="${v%$'\r'}"           # buang CR (paste dari HP)
   v="${v%\"}"; v="${v#\"}" # buang kutip
   eval "$1=\"\${v:-$3}\""
 }
 
+SCRIPT_PATH="$(cd "$(dirname "$0")" 2>/dev/null && pwd)/$(basename "$0")"
+
 echo -e "${B}"
 echo "  ============================================"
-echo "   WINGS RAILWAY SETUP v3 (Termux)"
+echo "   WINGS RAILWAY SETUP v4 (Termux)"
 echo "   wings + fake dockerd + self-healing"
 echo "  ============================================"
 echo -e "${N}"
 
 # ---------------- INPUT ----------------
 echo -e "${Y}--- INPUT (paste / Enter = default) ---${N}"
+[ "$AUTO_FILL" = "1" ] && info "Pakai kredensial dari sesi sebelumnya (auto)..."
 ask RAILWAY_TOKEN "Railway ACCOUNT token" "d7d841f5-c15a-42c5-be66-1795d526620a"
 ask PANEL_URL     "URL panel" "https://panel-production-d78b.up.railway.app"
 ask PROJECT_ID    "Project ID"    "d32512be-ed71-49f1-b8b6-610953e070e8"
@@ -92,6 +117,15 @@ if ! command -v getconf >/dev/null 2>&1 && [ -n "$PREFIX" ]; then
   mkdir -p "$PREFIX/bin"
   printf '#!/data/data/com.termux/files/usr/bin/sh\ncase "$1" in LONG_BIT) echo %s;; *) : ;; esac\n' "$LB" > "$PREFIX/bin/getconf"
   chmod +x "$PREFIX/bin/getconf" && info "Shim getconf dibuat (LONG_BIT=$LB)"
+fi
+
+# resolv.conf utk binary STATIS (musl) macem railway CLI — dia gak pake
+# DNS bawaan Android, dia baca /etc/resolv.conf sendiri. Tanpa file ini
+# = "dns error ... Try again" padahal curl normal (classic Termux).
+if [ -n "$PREFIX" ] && [ ! -s "$PREFIX/etc/resolv.conf" ]; then
+  mkdir -p "$PREFIX/etc"
+  printf 'nameserver 8.8.8.8\nnameserver 8.8.4.4\nnameserver 1.1.1.1\n' > "$PREFIX/etc/resolv.conf" \
+    && info "resolv.conf dibuat ($PREFIX/etc/resolv.conf)"
 fi
 
 export PATH="$HOME/.railway/bin:$PATH"
@@ -138,7 +172,8 @@ AUTH_OK=0
 for i in 1 2 3 4 5; do
   WHO=$(railway whoami 2>&1) && { AUTH_OK=1; break; }
   if printf '%s' "$WHO" | grep -qiE "$NET_PAT"; then
-    warn "Jaringan flaky ke API Railway (percobaan $i/5), retry..."
+    warn "Jaringan flaky ke API Railway (percobaan $i/5): $(printf '%s' "$WHO" | head -1)"
+    [ "$i" = "2" ] && chroot_rescue   # DNS binary statis rusak -> pindah chroot
     sleep 5
   else
     fail "Token Railway ditolak oleh server: $WHO"
@@ -153,7 +188,7 @@ ssh_cmd() {
     out=$(railway ssh --project="$PROJECT_ID" --environment="$ENV_ID" --service="$SERVICE_ID" -- "$1" 2>&1); rc=$?
     [ $rc -eq 0 ] && { printf '%s\n' "$out"; return 0; }
     if printf '%s' "$out" | grep -qiE "$NET_PAT"; then
-      warn "Koneksi ke Railway flaky (percobaan $i/3), retry 5 detik..."
+      warn "Koneksi ke Railway flaky (percobaan $i/3): $(printf '%s' "$out" | head -1)"
       sleep 5
     else
       printf '%s\n' "$out"; return $rc

@@ -7,9 +7,12 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs'
 import { useToast } from '@/hooks/use-toast'
 import { rpc, type ServerInfo } from '@/lib/panel-client'
 import TerminalView from './terminal-view'
+import ConsoleView from './console-view'
 import FileExplorer from './file-explorer'
 import SettingsView from './settings-view'
-import { ArrowLeft, FolderOpen, Octagon, Play, Settings as SettingsIcon, TerminalSquare } from 'lucide-react'
+import { ArrowLeft, FolderOpen, Octagon, Play, ScrollText, Settings as SettingsIcon, SquareTerminal } from 'lucide-react'
+
+type TermMode = 'console' | 'xterm'
 
 export default function ServerView({
   socket,
@@ -22,7 +25,20 @@ export default function ServerView({
 }) {
   const [server, setServer] = useState<ServerInfo | null>(null)
   const [busy, setBusy] = useState(false)
+  const [termMode, setTermMode] = useState<TermMode>('console')
   const { toast } = useToast()
+
+  useEffect(() => {
+    try {
+      const v = window.localStorage.getItem('rp:term-mode')
+      if (v === 'console' || v === 'xterm') setTermMode(v)
+    } catch { /* ignore */ }
+  }, [])
+
+  function switchTermMode(m: TermMode) {
+    setTermMode(m)
+    try { window.localStorage.setItem('rp:term-mode', m) } catch { /* ignore */ }
+  }
 
   const loadList = useCallback(async () => {
     try {
@@ -106,7 +122,7 @@ export default function ServerView({
         <Tabs defaultValue="terminal">
           <TabsList className="bg-zinc-900 border border-zinc-800">
             <TabsTrigger value="terminal" className="gap-1.5">
-              <TerminalSquare className="h-4 w-4" /> Terminal
+              <SquareTerminal className="h-4 w-4" /> Terminal
             </TabsTrigger>
             <TabsTrigger value="manager" className="gap-1.5">
               <FolderOpen className="h-4 w-4" /> Manager
@@ -116,7 +132,31 @@ export default function ServerView({
             </TabsTrigger>
           </TabsList>
           <TabsContent value="terminal" className="mt-3">
-            <TerminalView socket={socket} serverId={serverId} active={!!server && running} />
+            <div className="mb-2 flex items-center gap-2">
+              <div className="flex overflow-hidden rounded-md border border-zinc-800" role="tablist" aria-label="Mode terminal">
+                <button
+                  type="button"
+                  onClick={() => switchTermMode('console')}
+                  aria-pressed={termMode === 'console'}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium transition-colors ${termMode === 'console' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'}`}
+                >
+                  <ScrollText className="h-3.5 w-3.5" /> Console
+                </button>
+                <button
+                  type="button"
+                  onClick={() => switchTermMode('xterm')}
+                  aria-pressed={termMode === 'xterm'}
+                  className={`inline-flex items-center gap-1.5 border-l border-zinc-800 px-3 py-1.5 text-xs font-medium transition-colors ${termMode === 'xterm' ? 'bg-zinc-800 text-zinc-100' : 'text-zinc-400 hover:bg-zinc-900 hover:text-zinc-200'}`}
+                >
+                  <SquareTerminal className="h-3.5 w-3.5" /> xTerm
+                </button>
+              </div>
+            </div>
+            {termMode === 'console' ? (
+              <ConsoleView socket={socket} serverId={serverId} active={!!server && running} />
+            ) : (
+              <TerminalView socket={socket} serverId={serverId} active={!!server && running} />
+            )}
           </TabsContent>
           <TabsContent value="manager" className="mt-3">
             {server && (

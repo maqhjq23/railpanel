@@ -1,8 +1,21 @@
-# RailPanel — Next.js + socket.io dalam 1 port, plus python3/zip/git buat server user
-FROM node:22-bookworm
+# RailPanel — Ubuntu 24.04 (akses root penuh) + Node 22 + toolset dev lengkap
+FROM ubuntu:24.04
 
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    zip unzip git curl nano procps tini ca-certificates \
+ENV DEBIAN_FRONTEND=noninteractive \
+    PIP_BREAK_SYSTEM_PACKAGES=1 \
+    TERM=xterm-256color
+
+# Node 22 dari NodeSource, lalu toolset lengkap (container jalan sebagai ROOT,
+# jadi apt/pip/compile bebas — sesuai kebutuhan user)
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends curl ca-certificates gnupg \
+  && curl -fsSL https://deb.nodesource.com/setup_22.x | bash - \
+  && apt-get install -y --no-install-recommends \
+    nodejs \
+    git wget zip unzip tar less jq nano vim htop procps psmisc sudo \
+    openssh-client iproute2 iputils-ping dnsutils \
+    python3 python3-pip python3-venv build-essential \
+    tini \
   && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

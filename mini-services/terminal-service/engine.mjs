@@ -70,9 +70,11 @@ function safePath(id, rel) {
 // ---------------- runtime state ----------------
 // Model RailPanel: 1 server = 1 folder + 1 terminal (PTY).
 // Terminal AKTIF = PTY jalan, MATI = gak ada proses. Gak ada auto-run script.
-const terminals = new Map() // id -> { proc, pty, clients:Set, backlog:string }
+const terminals = new Map() // id -> { proc, pty, clients:Set, backlog:string, ready:boolean, inputBuf:string[] }
 
-const MAX_BACKLOG = 12 * 1024
+// Backlog console: diputar ulang (replay) tiap kali user attach/buka tab,
+// gaya scrollback console Pterodactyl.
+const MAX_BACKLOG = 64 * 1024
 
 function hasScriptBin() {
   return fs.existsSync('/usr/bin/script') || fs.existsSync('/bin/script') || fs.existsSync('/usr/local/bin/script')
@@ -118,12 +120,25 @@ function ensureTerminal(id) {
   } else {
     proc = spawn('bash', ['-i'], { cwd: dir, env: buildEnv(srv || { id }) })
   }
-  t = { proc, pty, clients: new Set(), backlog: '' }
+  t = { proc, pty, clients: new Set(), backlog: '', ready: false, inputBuf: [] }
   terminals.set(id, t)
+  const flushInput = () => {
+    if (t.proc.exitCode !== null || t.proc.signalCode !== null) return
+    const buf = t.inputBuf.splice(0)
+    for (const d of buf) { try { t.proc.stdin.write(d) } catch { /* */ } }
+  }
   const onData = (chunk) => {
+    if (!t.ready) {
+      // shell baru nembe output (prompt) = readline siap; kasih jeda kecil biar
+      // echo line-discipline & readline gak tabrakan (mencegah echo dobel/kepotong)
+      t.ready = true
+      setTimeout(flushInput, 400)
+    }
     t.backlog = (t.backlog + chunk.toString('utf8')).slice(-MAX_BACKLOG)
     io?.to('term:' + id).emit('term:out', { id, data: chunk.toString('utf8') })
   }
+  // jaga-jaga: kalau shell gak pernah output, flush paksa setelah 3 detik
+  setTimeout(() => { if (!t.ready) { t.ready = true; flushInput() } }, 3000)
   proc.stdout.on('data', onData)
   proc.stderr.on('data', onData)
   proc.on('exit', () => {
@@ -330,6 +345,11 @@ export function attachEngine(httpServer, opts = {}) {
     socket.on('terminal:input', ({ id, data }) => {
       const t = terminals.get(id)
       if (!t) return
+      // shell belum siap (baru di-spawn): antri dulu, jangan langsung ditulis
+      if (!t.ready) {
+        if (t.inputBuf.length < 64) t.inputBuf.push(String(data))
+        return
+      }
       try { t.proc.stdin.write(data) } catch { /* */ }
     })
 

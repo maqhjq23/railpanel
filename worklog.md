@@ -239,3 +239,25 @@ Stage Summary:
 - Guest account gofile: id fb6b4875-4cbb-4770-a6e7-49136b328630, token T335UlEb1Vn7i35H12XkG0mYIinVLDHB (bisa dipakai manage/delete file)
 - PERINGATAN: arsip mengandung kredensial (.env ADMIN_PASSWORD/AUTH_SECRET, worklog berisi token Railway & password panel) -> link JANGAN disebar
 - Catatan teknis: gofile upload wajib --http1.1 + Expect kosong dari sandbox ini (HTTP/2 hang)
+
+---
+Task ID: 12
+Agent: Super Z (main)
+Task: Terminal Ubuntu full akses + console gaya Pterodactyl (log & input terpisah)
+
+Work Log:
+- Dockerfile diganti: FROM ubuntu:24.04 + Node 22 via NodeSource; toolset lengkap (git wget zip unzip tar less jq nano vim htop procps psmisc sudo openssh-client iproute2 iputils-ping dnsutils python3 python3-pip python3-venv build-essential tini); ENV PIP_BREAK_SYSTEM_PACKAGES=1 (biar pip gak kena externall-managed); TERM=xterm-256color; jalan sebagai ROOT penuh
+- ConsoleView baru (src/components/panel/console-view.tsx): pane LOG terpisah dari baris INPUT (gaya console Pterodactyl); ANSI-to-HTML renderer sendiri (SGR 16/256/truecolor, bold/dim/italic/underline, OSC strip, toleran escape kepotong antar-chunk, HTML di-escape); auto-scroll + pause saat user scroll ke atas + pill "Log baru"; riwayat perintah ↑/↓ (100 entri); tombol Kirim / Ctrl+C (kirim \x03) / Bersihkan; badge TERHUBUNG; placeholder "Terminal mati" saat off
+- ServerView: toggle mode terminal Console (DEFAULT) / xTerm, persist di localStorage (rp:term-mode); xterm lama tetap ada untuk program layar penuh (nano/htop)
+- engine.mjs: (1) backlog 12KB → 64KB buat replay scrollback; (2) READY-GATE input: terminal baru spawn → input user DIBUFFER sampai shell output pertama (prompt=readline siap) +400ms, fallback flush 3 detik → mencegah echo dobel/kepotong yang terjadi kalau user ngetik pas bash masih init (terbukti via backlog mentah: "\r<SOLE_777" — teks hilang di level PTY, bukan renderer)
+- Bug saat coding: rule react-hooks/set-state-in-effect → semua reset state dipindah ke callback terminal:attach (async); icon import TerminalSquare→SquareTerminal; e2e script baca token = kata TERAKHIR baris → pakai RP_TOKEN env langsung
+- CLI railway variables tabel memotong AUTH_SECRET (tampil 45 dari 64 char) → pakai --json
+- Deploy 2x: f945fa64 (Ubuntu build) SUCCESS; 56c5fcd3 (engine ready-gate) SUCCESS
+- Verifikasi produksi: e2e 10/10 PASS; tp-ubuntu-check.mjs (baru): Ubuntu 24.04.5 LTS, uid=0, apt/gcc/python3/node/git ada, apt-get update+install figlet SUKSES; browser smoke: dashboard + toggle Console/xTerm render (panel DanzPro user gak diutak-atik)
+- Catatan: figlet & paket yang diinstall user via apt bersifat EFEMERAL (hilang saat redeploy) — paket build-time di Dockerfile permanen
+
+Stage Summary:
+- Terminal sekarang: Ubuntu 24.04 ROOT penuh (apt/pip/gcc bebas) + console gaya Pterodactyl (log & input misah) + mode xTerm opsional
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Script baru: scripts/tp-ubuntu-check.mjs (cek env produksi via console)
+- Input sebelum shell siap aman (dibuffer engine), echo selalu bersih

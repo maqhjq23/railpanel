@@ -108,4 +108,24 @@ Stage Summary:
 - Insight kunci utk deploy Termux: SEMUA binary statis musl (railway, dst) gak bisa DNS di Termux tanpa /etc/resolv.conf via termux-chroot — bukan masalah jaringan/token
 - Fallback manual user: pkg install proot && termux-chroot bash wings-termux-setup.sh
 
+---
+Task ID: 6
+Agent: Super Z (main)
+Task: Matikan enforcement 2FA di panel Pterodactyl (user capek di-redirect ke /account terus)
+
+Work Log:
+- User tinggalkan urusan script Termux, minta supaya panel gak maksa 2FA lagi
+- Buat helper reusable scripts/ptero_ssh_run.sh (base64 payload → railway ssh → jalankan di container) + scripts/ptero_2fa_remote_inspect.sh
+- Lokasi app panel: /app (bukan /var/www/html) — image Docker resmi Pterodactyl, nginx root /app/public; artisan tersedia, tinker OK
+- Inspeksi DB: settings table ada key `settings::pterodactyl:auth:2fa_required` = 2 (wajib utk SEMUA user); users: id=1 thedanzpro@gmail.com & id=2 admin@example.com, dua-duanya root_admin + use_totp=0 → makanya tiap login dibawa ke setup 2FA
+- Fix: UPDATE settings SET value='0' WHERE key='settings::pterodactyl:auth:2fa_required' via artisan tinker; verify: value=0
+- Smoke test: /auth/login 200; wings API publik 200 (node tetap hijau)
+- Setting tersimpan di DB eksternal persisten → aman dari redeploy container, gak perlu diulang
+
+Stage Summary:
+- Enforcement 2FA = OFF (value 0), efek langsung tanpa restart panel (middleware baca setting per-request)
+- use_totp kedua akun memang 0 → tidak ada TOTP yang perlu direset; user bisa login password-only
+- Re-enable kapan saja: Admin Area > Settings > Security > Require 2FA (atau ubah value ke 1/2 di DB)
+- Script bantu tersimpan: scripts/ptero_ssh_run.sh (helper eksekusi script remote di container)
+
 

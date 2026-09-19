@@ -261,3 +261,31 @@ Stage Summary:
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Script baru: scripts/tp-ubuntu-check.mjs (cek env produksi via console)
 - Input sebelum shell siap aman (dibuffer engine), echo selalu bersih
+
+---
+Task ID: 13
+Agent: Super Z (main)
+Task: 4 revisi terminal: hapus tombol Enter + Ctrl+C ke bawah, bug log (\n/line + kode), scroll xterm, bersihin UI
+
+Work Log:
+- Tombol "Kirim" (Enter) dihapus dari console — form submit via Enter di input; Ctrl+C + Bersihkan dipindah ke row di bawah input
+- Tampilan dibersihin: semua paragraf penjelasan dihapus (console-view, terminal-view, empty state "Terminal mati" tinggal icon+teks); badge TERHUBUNG jadi overlay kanan-atas log pane
+- ROOT CAUSE "bug kode" di log console (3 bug):
+  1. Regex CSI lama ([0-9;]*) gak match bracketed-paste bash `\x1b[?2004h`/`[?25l` → bocor jadi teks; fix: final byte class [@-~] + param [0-9;?]*
+  2. Char class lama [@-Z\\-_] membentuk range \-_ yang MENGGELAP ] (0x5D) → ESC ] (pembuka OSC) dimakan sbg escape single-char, judul OSC bocor; fix: pecah jadi [0-9=><@-Z\\] (tanpa [ ] ^ _)
+  3. Log dipotong per-BYTE (slice -200KB) → bisa motong di tengah tag HTML → kode `span style=` muncul; fix: simpan per BARIS (lines[] max 2000)
+- ROOT CAUSE "bug line": \r diconvert jadi \n → progress bar apt numpuk ratusan baris; fix: CR lazy (pendingCR) — \r cuma reset baris kalau ADA teks setelahnya; \r\n = newline biasa (baris gak ilang). 10 test renderer PASS (T1-T10: kode bocor, OSC split, CR rewrite, CSI split, escape HTML, warna, cap baris, CRLF apt, CRLF split chunk)
+- ROOT CAUSE "xterm gak bisa scroll": (a) PTY fix 80x24 via wrapper `script` gak bisa resize → display kacau; (b) xterm gak punya touch scroll (user di HP!); (c) fit gak diulang saat resize. Fix: node-pty (PTY asli, optionalDependencies, fallback `script` tetap ada) + RPC `terminal:resize` (clamp 2-500 x 2-300) + scrollback 5000 + ResizeObserver/window resize/fonts.ready → fit+emit resize + touch swipe handler manual (touchstart/touchmove → scrollLines, preventDefault, touch-action:none)
+- node-pty 1.1.0: allowScripts di package.json; compile butuh build-essential+python3 (sudah di Dockerfile). PENTING: node-pty STABIL di node, tapi GC bun nutup fd PTY (~1-2 detik → SIGHUP sendiri) → test lokal WAJIB `node server.mjs`, bukan bun
+- engine.mjs: StringDecoder buat fallback `script` (UTF-8 split antar chunk), backlog slice mulai dari awal baris (replay gak mulai di tengah escape), attach balikin node/cols/rows, exit handler set t.dead
+- Sandbox quirk: PTY sandbox nge-strip CSI sequences setelah ESC (printf \e[31m → \e doang) — bukan bug app; produksi normal (warna ke-render, dibuktikan via tput)
+- xterm v6 scroll: wheel ASLI jalan (vsbase pakai wheelDeltaY sign inverted; synthetic WheelEvent gak bawa wheelDeltaY → arah kebalik → test jadi menyesatkan; bukti: dispatch + wheelDeltaY 720 → scrollTop 5670→5370). CDP `mouse wheel` agent-browser nembak di (0,0) (kena header) — gak bisa dipake test wheel. Keyboard Shift+PageUp jalan, touch swipe jalan (5670→5640)
+- Deploy: CLI hilang (sandbox reset) → reinstall v4.5.4 musl + config.json dari skema source (user.token + projects camelCase); 2x deploy: c13093ee + 820e73d0 (final, tanpa debug line) SUCCESS
+- Verifikasi produksi: e2e 10/10 PASS; tp-pty-check.mjs (baru): attach node-pty=true, resize ok, tput 130x40 = winsize beneran berubah; tp-ubuntu-check: Ubuntu 24.04 root+apt ok; browser: console tampil bersih (MERAH/HIJO ke-render, BERHASIL-100 OK progress bar 1 baris, gak ada kode bocor), xterm scroll PageUp/wheel/touch ok; panel test "Tes UI Baru" dihapus, panel DanzPro user utuh (terminal mati krn restart kontainer — data aman di volume)
+- Screenshot: download/rp-console-final.png, rp-prod-console.png, rp-prod-xterm-scroll.png, rp-prod-xterm-wheel4.png, rp-prod-final-dashboard.png
+
+Stage Summary:
+- Semua 4 permintaan user terpenuhi + terverifikasi produksi
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Catatan deploy: restart kontainer = semua terminal mati (efemeral); paket apt yang user install juga hilang saat redeploy
+- Script baru: tp-poll-deploy.sh, tp-pty-check.mjs (verifikasi node-pty/resize), tp-debug-connect.mjs, tp-debug-term.mjs (debug)

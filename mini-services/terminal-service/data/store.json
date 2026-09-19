@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "id": "33c1a504fc87",
+      "name": "Tes E2E Bot",
+      "description": "panel buat test otomatis",
+      "env": {},
+      "createdAt": "2026-09-19T18:08:41.299Z"
+    }
+  ]
+}

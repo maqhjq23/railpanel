@@ -1,12 +1,15 @@
 'use client'
 
-// ConsoleView — console gaya Pterodactyl: pane LOG terpisah dari baris INPUT.
-// Terminal di server tetap PTY asli; cuma cara tampil & input yang diubah.
+// ConsoleView — log pane + input line terpisah (gaya console Pterodactyl).
+// Renderer ANSI baris-per-baris:
+//   - \r = tulis ulang baris (progress bar apt/curl/wget jadi rapi, gak numpuk)
+//   - escape yang kebelah antar chunk ditahan, gak pernah bocor jadi teks
+//   - log disimpan per BARIS (gak ada potongan HTML yang korup)
 import { useEffect, useRef, useState } from 'react'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
-import { ArrowDown, CornerDownLeft, Power } from 'lucide-react'
+import { ArrowDown, Power } from 'lucide-react'
 
 // ---------- palet warna ANSI (16 + 256 color) ----------
 const BASIC16 = ['#3f3f46', '#f87171', '#34d399', '#fbbf24', '#60a5fa', '#c084fc', '#22d3ee', '#e4e4e7']
@@ -25,7 +28,8 @@ function sgr256(n: number): string {
   return `rgb(${g},${g},${g})`
 }
 
-// ---------- ANSI -> HTML (toleran chunk terpotong di tengah escape) ----------
+const MAX_LINES = 2000 // scrollback log di browser (per baris, bukan per byte)
+
 class AnsiToHtml {
   private pending = ''
   private fg = ''
@@ -35,6 +39,9 @@ class AnsiToHtml {
   private italic = false
   private underline = false
   private openSig = ''
+  private lines: string[] = []
+  private cur = ''
+  private pendingCR = false
 
   private reset() {
     this.fg = ''
@@ -95,60 +102,103 @@ class AnsiToHtml {
     }
   }
 
-  private wrap(s: string): string {
-    const sig = this.sig()
-    if (sig === '') {
-      if (this.openSig !== '') {
-        this.openSig = ''
-        return '</span>' + s
-      }
-      return s
+  private openSpan() {
+    const s = this.sig()
+    if (s && s !== this.openSig) {
+      if (this.openSig) this.cur += '</span>'
+      this.cur += `<span style="${s}">`
+      this.openSig = s
     }
-    if (sig !== this.openSig) {
-      let out = ''
-      if (this.openSig !== '') out += '</span>'
-      out += `<span style="${sig}">`
-      this.openSig = sig
-      return out + s
-    }
-    return s
   }
 
-  private text(t: string): string {
-    if (!t) return ''
-    const esc = t.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-    const norm = esc.replace(/\r\n/g, '\n').replace(/\r/g, '\n')
-    return this.wrap(norm)
+  private closeSpan() {
+    if (this.openSig) {
+      this.cur += '</span>'
+      this.openSig = ''
+    }
   }
 
-  feed(chunk: string): string {
-    this.pending += chunk
-    // buang OSC (judul tab terminal dll)
-    this.pending = this.pending.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+  private pushLine() {
+    this.closeSpan()
+    this.lines.push(this.cur)
+    if (this.lines.length > MAX_LINES) this.lines.splice(0, this.lines.length - MAX_LINES)
+    this.cur = ''
+  }
+
+  private resetLine() {
+    // \r = kursor balik ke kolom 0 → tulis ulang baris (gaya terminal asli)
+    this.closeSpan()
+    this.cur = ''
+  }
+
+  private writeText(t: string) {
+    if (!t) return
     let out = ''
-    const re = /\x1b\[([0-9;]*)([a-zA-Z])/g
+    // CR sifatnya malas: cuma efektif kalau ADA teks setelahnya (progress bar).
+    // CR yang langsung disusul LF (\r\n) = newline biasa, baris gak dibuang.
+    const flush = () => {
+      if (!out) return
+      if (this.pendingCR) {
+        this.closeSpan()
+        this.cur = ''
+        this.pendingCR = false
+      }
+      this.openSpan()
+      this.cur += out
+      out = ''
+    }
+    for (const ch of t) {
+      if (ch === '\n') { flush(); this.pendingCR = false; this.pushLine() }
+      else if (ch === '\r') { flush(); this.pendingCR = true }
+      else if (ch === '\x07' || ch === '\x08') { /* bell & backspace: skip */ }
+      else {
+        if (ch === '&') out += '&amp;'
+        else if (ch === '<') out += '&lt;'
+        else if (ch === '>') out += '&gt;'
+        else out += ch
+      }
+    }
+    flush()
+  }
+
+  feed(chunk: string): void {
+    this.pending += chunk
+    // buang OSC yang sudah lengkap (judul tab terminal dll)
+    this.pending = this.pending.replace(/\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)/g, '')
+    // CSI (semua final byte, termasuk [?2004h bracketed-paste dari bash), OSC,
+    // ESC single-char, dan ESC ( X — semuanya dikenali & dibuang dengan bersih
+    const re = /\x1b(?:\[([0-9;?]*)([@-~])|\]([^\x07\x1b]*)(?:\x07|\x1b\\)|([0-9=><@-Z\\])|([()][0-9A-Za-z]))/g
     let last = 0
     let m: RegExpExecArray | null
     while ((m = re.exec(this.pending))) {
-      out += this.text(this.pending.slice(last, m.index))
-      if (m[2] === 'm') this.applySgr(m[1])
-      last = m.index + m[0].length
+      this.writeText(this.pending.slice(last, m.index))
+      if (m[1] !== undefined && m[2] === 'm') this.applySgr(m[1])
+      last = re.lastIndex
     }
     let tail = this.pending.slice(last)
     // escape yang kepotong di ujung chunk ditahan buat feed berikutnya
-    const incomplete = /(?:\x1b\[[0-9;?]*|\x1b\]|\x1b)$/.exec(tail)
-    if (incomplete) {
-      this.pending = incomplete[0]
-      tail = tail.slice(0, tail.length - incomplete[0].length)
+    const i = tail.lastIndexOf('\x1b')
+    if (i !== -1) {
+      const rest = tail.slice(i)
+      const done = /^(?:\x1b\[[0-9;?]*[@-~]|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|\x1b[0-9=><@-Z\\]|\x1b[()][0-9A-Za-z])/.test(rest)
+      if (!done && rest.length <= 4096) {
+        this.pending = rest
+        tail = tail.slice(0, i)
+      } else {
+        // escape ngawur yang gak pernah selesai (OSC bengkak): buang prefix-nya
+        this.pending = ''
+        if (!done) tail = tail.slice(0, i)
+      }
     } else {
       this.pending = ''
     }
-    out += this.text(tail)
-    return out
+    this.writeText(tail)
+  }
+
+  render(): string {
+    return this.lines.join('\n') + this.cur
   }
 }
-
-const MAX_LOG_HTML = 200 * 1024 // batas log di browser (biar gak bengkak)
 
 export default function ConsoleView({
   socket,
@@ -162,7 +212,6 @@ export default function ConsoleView({
   const logRef = useRef<HTMLDivElement>(null)
   const stickRef = useRef(true)
   const ansiRef = useRef<AnsiToHtml | null>(null)
-  const htmlRef = useRef('')
   const rafRef = useRef<number | null>(null)
   const historyRef = useRef<string[]>([])
   const [logHtml, setLogHtml] = useState('')
@@ -171,14 +220,12 @@ export default function ConsoleView({
   const [histIdx, setHistIdx] = useState<number | null>(null)
   const [showJump, setShowJump] = useState(false)
 
-  function pushHtml(chunk: string) {
-    const ansi = ansiRef.current
-    if (!ansi) return
-    htmlRef.current = (htmlRef.current + ansi.feed(chunk)).slice(-MAX_LOG_HTML)
+  function scheduleRender() {
     if (rafRef.current == null) {
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null
-        setLogHtml(htmlRef.current)
+        const ansi = ansiRef.current
+        if (ansi) setLogHtml(ansi.render())
       })
     }
   }
@@ -188,11 +235,14 @@ export default function ConsoleView({
     let disposed = false
 
     const onOut = ({ id, data }: { id: string; data: string }) => {
-      if (id === serverId) pushHtml(data)
+      if (id !== serverId) return
+      ansiRef.current?.feed(data)
+      scheduleRender()
     }
     const onClosed = ({ id }: { id: string }) => {
       if (id === serverId) {
-        pushHtml('\n\x1b[33m[RailPanel] terminal dimatikan — tekan Start buat nyalain lagi.\x1b[0m\n')
+        ansiRef.current?.feed('\n\x1b[33m[RailPanel] terminal dimatikan\x1b[0m\n')
+        scheduleRender()
         setConnected(false)
       }
     }
@@ -204,16 +254,17 @@ export default function ConsoleView({
     socket.emit('terminal:attach', { id: serverId }, (res: { ok: boolean; backlog?: string; error?: string }) => {
       if (disposed) return
       ansiRef.current = new AnsiToHtml()
-      htmlRef.current = ''
       stickRef.current = true
       setShowJump(false)
       setLogHtml('')
       if (res?.ok) {
-        if (res.backlog) pushHtml(res.backlog)
-        else pushHtml('\x1b[32m[RailPanel] console aktif — ketik perintah di bawah.\x1b[0m\n')
+        if (res.backlog) ansiRef.current.feed(res.backlog)
+        else ansiRef.current.feed('\x1b[32m[RailPanel] console aktif\x1b[0m\n')
+        scheduleRender()
         setConnected(true)
       } else {
-        pushHtml(`\x1b[31m[gagal nyalain terminal: ${res?.error || 'unknown'}]\x1b[0m\n`)
+        ansiRef.current.feed(`\x1b[31m[gagal nyalain terminal: ${res?.error || 'unknown'}]\x1b[0m\n`)
+        scheduleRender()
       }
     })
 
@@ -250,7 +301,6 @@ export default function ConsoleView({
 
   function clearLog() {
     ansiRef.current = new AnsiToHtml()
-    htmlRef.current = ''
     setLogHtml('')
   }
 
@@ -283,25 +333,12 @@ export default function ConsoleView({
           <Power className="h-5 w-5 text-zinc-500" />
         </div>
         <p className="font-medium text-zinc-200">Terminal mati</p>
-        <p className="max-w-xs text-center text-sm text-zinc-500">
-          Tekan tombol <span className="font-semibold text-emerald-400">Start</span> di kanan atas buat nyalain terminal.
-        </p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between gap-2">
-        <p className="text-sm text-zinc-500">
-          Console gaya Pterodactyl — log &amp; input terpisah. Untuk program layar penuh (nano, htop) pindah mode{' '}
-          <span className="font-semibold text-zinc-300">xTerm</span>.
-        </p>
-        <Badge variant="outline" className={connected ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-400'}>
-          {connected ? 'TERHUBUNG' : 'MENGHUBUNGKAN...'}
-        </Badge>
-      </div>
-
+    <div className="flex flex-col gap-2">
       <div className="relative">
         <div
           ref={logRef}
@@ -317,6 +354,14 @@ export default function ConsoleView({
         >
           <div dangerouslySetInnerHTML={{ __html: logHtml }} />
         </div>
+        <Badge
+          variant="outline"
+          className={`absolute top-2.5 right-3 z-10 bg-zinc-950/80 backdrop-blur ${
+            connected ? 'border-emerald-800 text-emerald-400' : 'border-zinc-700 text-zinc-400'
+          }`}
+        >
+          {connected ? 'TERHUBUNG' : 'MENGHUBUNGKAN...'}
+        </Badge>
         {showJump && (
           <button
             onClick={() => {
@@ -336,7 +381,7 @@ export default function ConsoleView({
           e.preventDefault()
           sendLine()
         }}
-        className="flex flex-wrap items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
+        className="flex items-center gap-2 rounded-lg border border-zinc-800 bg-zinc-900/60 px-3 py-2"
       >
         <span className="font-mono text-sm font-bold text-emerald-400" aria-hidden="true">
           $
@@ -349,7 +394,7 @@ export default function ConsoleView({
           }}
           onKeyDown={onInputKeyDown}
           disabled={!connected}
-          placeholder={connected ? 'Ketik perintah, Enter buat kirim...' : 'Terminal mati — tekan Start dulu'}
+          placeholder={connected ? 'Ketik perintah...' : 'Terminal mati'}
           className="min-w-[140px] flex-1 border-0 bg-transparent font-mono text-sm shadow-none focus-visible:ring-0 dark:bg-transparent"
           aria-label="Input perintah console"
           autoComplete="off"
@@ -357,19 +402,16 @@ export default function ConsoleView({
           autoCorrect="off"
           spellCheck={false}
         />
-        <Button type="submit" size="sm" className="bg-emerald-600 hover:bg-emerald-500" disabled={!connected}>
-          <CornerDownLeft className="h-4 w-4" /> Kirim
-        </Button>
-        <Button type="button" variant="outline" size="sm" disabled={!connected} onClick={sendCtrlC} title="Kirim sinyal Ctrl+C">
+      </form>
+
+      <div className="flex justify-end gap-2">
+        <Button type="button" variant="outline" size="sm" disabled={!connected} onClick={sendCtrlC}>
           Ctrl+C
         </Button>
-        <Button type="button" variant="ghost" size="sm" onClick={clearLog} title="Bersihin log di layar">
+        <Button type="button" variant="ghost" size="sm" onClick={clearLog}>
           Bersihkan
         </Button>
-      </form>
-      <p className="text-xs text-zinc-600">
-        Riwayat perintah: panah ↑ / ↓ di kotak input. Log gak hilang pas pindah tab selama terminal masih aktif.
-      </p>
+      </div>
     </div>
   )
 }

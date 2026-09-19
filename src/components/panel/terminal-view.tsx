@@ -1,5 +1,10 @@
 'use client'
 
+// TerminalView — xterm.js penuh (buat program layar penuh: nano, htop, vim).
+// Scroll fix:
+//   - scrollback 5000 + sync winsize PTY ↔ xterm (terminal:resize)
+//   - fit ulang saat kontainer berubah (ResizeObserver / rotasi layar / webfont)
+//   - swipe di HP bisa scroll (xterm gak punya touch scroll bawaan)
 import { useEffect, useRef, useState } from 'react'
 import { Terminal } from '@xterm/xterm'
 import { FitAddon } from '@xterm/addon-fit'
@@ -24,17 +29,33 @@ export default function TerminalView({
       setConnected(false)
       return
     }
-    let term: Terminal | null = null
     let disposed = false
+    let term: Terminal | null = null
+    let ro: ResizeObserver | null = null
+    let raf = 0
+    let onWinResize: (() => void) | null = null
+    let removeTouch: (() => void) | null = null
+
+    const onOut = ({ id, data }: { id: string; data: string }) => {
+      if (id === serverId && term) term.write(data)
+    }
+    const onClosed = ({ id }: { id: string }) => {
+      if (id === serverId && term) {
+        term.write('\r\n\x1b[33m[RailPanel] terminal dimatikan\x1b[0m\r\n')
+        setConnected(false)
+      }
+    }
 
     async function init() {
       if (!containerRef.current) return
       const { FitAddon: Fit } = await import('@xterm/addon-fit')
+      if (disposed) return
       term = new Terminal({
         fontSize: 13,
         fontFamily: 'Menlo, Monaco, "Cascadia Code", monospace',
         cursorBlink: true,
         convertEol: false,
+        scrollback: 5000,
         theme: {
           background: '#0c0c0f',
           foreground: '#e4e4e7',
@@ -53,50 +74,93 @@ export default function TerminalView({
       const fit = new Fit()
       term.loadAddon(fit)
       term.open(containerRef.current)
-      try { fit.fit() } catch { /* */ }
+
+      const syncSize = () => {
+        if (!term || disposed) return
+        try { fit.fit() } catch { /* */ }
+        try {
+          socket.emit('terminal:resize', { id: serverId, cols: term.cols, rows: term.rows })
+        } catch { /* */ }
+      }
+      syncSize()
+      // metrik font bisa berubah setelah webfont siap → fit ulang
+      document.fonts?.ready?.then(() => syncSize()).catch(() => {})
+      onWinResize = syncSize
+      window.addEventListener('resize', onWinResize)
+      if ('ResizeObserver' in window && containerRef.current) {
+        ro = new ResizeObserver(() => {
+          if (raf) cancelAnimationFrame(raf)
+          raf = requestAnimationFrame(syncSize)
+        })
+        ro.observe(containerRef.current)
+      }
 
       term.onData((data) => {
         socket.emit('terminal:input', { id: serverId, data })
       })
 
-      const onOut = ({ id, data }: { id: string; data: string }) => {
-        if (id === serverId && term) term.write(data)
+      // ===== swipe scroll buat HP (wheel desktop udah ditangani xterm) =====
+      const el = containerRef.current
+      let lastY: number | null = null
+      const cellH = () => {
+        const d = (term as unknown as { dimensions?: { css?: { cell?: { height?: number } } } })
+          ?.dimensions?.css?.cell?.height
+        return d || 18
       }
-      const onClosed = ({ id }: { id: string }) => {
-        if (id === serverId && term) {
-          term.write('\r\n\x1b[33m[terminal dimatikan]\x1b[0m\r\n')
+      const touchStart = (e: TouchEvent) => {
+        lastY = e.touches[0]?.clientY ?? null
+      }
+      const touchMove = (e: TouchEvent) => {
+        if (lastY == null || !term) return
+        const y = e.touches[0]?.clientY
+        if (y == null) return
+        const dy = lastY - y
+        if (Math.abs(dy) >= cellH() / 2) {
+          const lines = Math.max(-30, Math.min(30, Math.round(dy / (cellH() / 2))))
+          term.scrollLines(lines)
+          lastY = y
         }
+        e.preventDefault()
       }
+      el.addEventListener('touchstart', touchStart, { passive: true })
+      el.addEventListener('touchmove', touchMove, { passive: false })
+      removeTouch = () => {
+        el.removeEventListener('touchstart', touchStart)
+        el.removeEventListener('touchmove', touchMove)
+      }
+
       socket.on('term:out', onOut)
       socket.on('term:closed', onClosed)
 
       // attach = ikut room + dapet backlog (terminal udah dijamin aktif oleh prop)
-      socket.emit('terminal:attach', { id: serverId }, (res: { ok: boolean; backlog?: string; pty?: boolean; error?: string }) => {
-        if (disposed) return
+      socket.emit('terminal:attach', { id: serverId }, (res: { ok: boolean; backlog?: string; error?: string }) => {
+        if (disposed || !term) return
         if (res?.ok) {
           if (res.backlog) term!.write(res.backlog)
-          else term!.writeln('\x1b[32m[RailPanel] terminal aktif. selamat menggunakan.\x1b[0m')
+          else term!.writeln('\x1b[32m[RailPanel] terminal aktif\x1b[0m')
+          // samain winsize PTY sama xterm sekarang juga
+          try {
+            socket.emit('terminal:resize', { id: serverId, cols: term!.cols, rows: term!.rows })
+          } catch { /* */ }
           setConnected(true)
         } else {
           term!.writeln(`\x1b[31m[gagal nyalain terminal: ${res?.error || 'unknown'}]\x1b[0m`)
         }
       })
-
-      const onResize = () => { try { fit.fit() } catch { /* */ } }
-      window.addEventListener('resize', onResize)
-      return () => {
-        window.removeEventListener('resize', onResize)
-      }
     }
 
-    const cleanup = init()
+    void init()
 
     return () => {
       disposed = true
-      socket.off('term:out')
-      socket.off('term:closed')
+      socket.off('term:out', onOut)
+      socket.off('term:closed', onClosed)
+      ro?.disconnect()
+      if (raf) cancelAnimationFrame(raf)
+      if (onWinResize) window.removeEventListener('resize', onWinResize)
+      removeTouch?.()
       term?.dispose()
-      void cleanup
+      term = null
     }
   }, [socket, serverId, active])
 
@@ -107,27 +171,25 @@ export default function TerminalView({
           <Power className="h-5 w-5 text-zinc-500" />
         </div>
         <p className="font-medium text-zinc-200">Terminal mati</p>
-        <p className="max-w-xs text-center text-sm text-zinc-500">
-          Tekan tombol <span className="font-semibold text-emerald-400">Start</span> di kanan atas buat nyalain terminal.
-        </p>
       </div>
     )
   }
 
   return (
-    <div className="space-y-2">
-      <div className="flex items-center justify-between">
-        <p className="text-sm text-zinc-500">
-          Shell biasa (bukan docker) — cwd: folder panel. <span className="hidden sm:inline">Ctrl+C jalan, program interaktif (nano, vim) jalan.</span>
-        </p>
-        <Badge variant="outline" className={connected ? 'border-emerald-700 text-emerald-400' : 'border-zinc-700 text-zinc-400'}>
-          {connected ? 'TERHUBUNG' : 'MENGHUBUNGKAN...'}
-        </Badge>
-      </div>
+    <div className="relative">
       <div
         ref={containerRef}
         className="h-[60vh] min-h-[360px] w-full overflow-hidden rounded-lg border border-zinc-800 bg-[#0c0c0f] p-1"
+        style={{ touchAction: 'none' }}
       />
+      <Badge
+        variant="outline"
+        className={`absolute top-2.5 right-3 z-10 bg-zinc-950/80 backdrop-blur ${
+          connected ? 'border-emerald-800 text-emerald-400' : 'border-zinc-700 text-zinc-400'
+        }`}
+      >
+        {connected ? 'TERHUBUNG' : 'MENGHUBUNGKAN...'}
+      </Badge>
     </div>
   )
 }

@@ -1,10 +1,12 @@
 // =============================================================
 // RailPanel Engine — socket.io handlers: servers CRUD, file ops,
-// terminal (PTY via util-linux `script`), managed run processes.
+// terminal (PTY asli via node-pty, fallback util-linux `script`).
 // Plain .mjs supaya bisa jalan di bun (sandbox) & node (Railway).
 // =============================================================
 import { Server } from 'socket.io'
 import { spawn } from 'child_process'
+import { createRequire } from 'module'
+import { StringDecoder } from 'string_decoder'
 import fs from 'fs'
 import fsp from 'fs/promises'
 import path from 'path'
@@ -13,6 +15,12 @@ import { fileURLToPath } from 'url'
 import { COOKIE_NAME, verifyToken, parseCookies } from '../../lib/panel-auth.mjs'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// node-pty = PTY asli (bisa resize winsize, UTF-8 aman, echo bener).
+// Kalau gagal ke-load (native build gagal), fallback ke util-linux `script`.
+const require = createRequire(import.meta.url)
+let nodePty = null
+try { nodePty = require('node-pty') } catch { nodePty = null }
 
 // ---- env fallback (sandbox: root .env mungkin gak kebaca otomatis) ----
 function loadEnvFallback() {
@@ -75,6 +83,14 @@ const terminals = new Map() // id -> { proc, pty, clients:Set, backlog:string, r
 // Backlog console: diputar ulang (replay) tiap kali user attach/buka tab,
 // gaya scrollback console Pterodactyl.
 const MAX_BACKLOG = 64 * 1024
+// potong backlog mulai dari awal baris biar replay gak mulai di tengah escape sequence
+function sliceBacklog(raw) {
+  if (raw.length < MAX_BACKLOG) return raw
+  let s = raw.slice(-MAX_BACKLOG)
+  const nl = s.indexOf('\n')
+  if (nl !== -1 && nl < MAX_BACKLOG / 2) s = s.slice(nl + 1)
+  return s
+}
 
 function hasScriptBin() {
   return fs.existsSync('/usr/bin/script') || fs.existsSync('/bin/script') || fs.existsSync('/usr/local/bin/script')
@@ -110,44 +126,67 @@ function listServersPublic() {
 // ---------------- terminal ----------------
 function ensureTerminal(id) {
   let t = terminals.get(id)
-  if (t && t.proc.exitCode === null && t.proc.signalCode === null) return t
+  if (t && !t.dead) return t
   const dir = serverDir(id)
   const srv = findServer(id)
-  const pty = hasScriptBin()
+  const env = buildEnv(srv || { id })
+  const COLS = 80
+  const ROWS = 24
   let proc
-  if (pty) {
-    proc = spawn('script', ['-qfc', 'bash', '/dev/null'], { cwd: dir, env: buildEnv(srv || { id }) })
+  if (nodePty) {
+    // PTY asli: bisa resize, UTF-8 aman, line-discipline bener (echo gak dobel)
+    proc = nodePty.spawn('bash', ['-i'], { name: 'xterm-256color', cols: COLS, rows: ROWS, cwd: dir, env })
+    t = { proc, node: true, cols: COLS, rows: ROWS, backlog: '', ready: false, inputBuf: [], dead: false, clients: new Set() }
   } else {
-    proc = spawn('bash', ['-i'], { cwd: dir, env: buildEnv(srv || { id }) })
+    const pty = hasScriptBin()
+    if (pty) proc = spawn('script', ['-qfc', 'bash', '/dev/null'], { cwd: dir, env })
+    else proc = spawn('bash', ['-i'], { cwd: dir, env })
+    t = { proc, node: false, cols: COLS, rows: ROWS, backlog: '', ready: false, inputBuf: [], dead: false, clients: new Set() }
   }
-  t = { proc, pty, clients: new Set(), backlog: '', ready: false, inputBuf: [] }
   terminals.set(id, t)
   const flushInput = () => {
-    if (t.proc.exitCode !== null || t.proc.signalCode !== null) return
+    if (t.dead) return
     const buf = t.inputBuf.splice(0)
-    for (const d of buf) { try { t.proc.stdin.write(d) } catch { /* */ } }
+    for (const d of buf) writeTerm(t, d)
   }
   const onData = (chunk) => {
+    if (!t.node) chunk = t.decoder.write(chunk) // gabungin UTF-8 yang kebelah antar chunk
     if (!t.ready) {
       // shell baru nembe output (prompt) = readline siap; kasih jeda kecil biar
       // echo line-discipline & readline gak tabrakan (mencegah echo dobel/kepotong)
       t.ready = true
       setTimeout(flushInput, 400)
     }
-    t.backlog = (t.backlog + chunk.toString('utf8')).slice(-MAX_BACKLOG)
-    io?.to('term:' + id).emit('term:out', { id, data: chunk.toString('utf8') })
+    t.backlog = sliceBacklog(t.backlog + chunk)
+    io?.to('term:' + id).emit('term:out', { id, data: chunk })
   }
   // jaga-jaga: kalau shell gak pernah output, flush paksa setelah 3 detik
   setTimeout(() => { if (!t.ready) { t.ready = true; flushInput() } }, 3000)
-  proc.stdout.on('data', onData)
-  proc.stderr.on('data', onData)
-  proc.on('exit', () => {
-    io?.to('term:' + id).emit('term:closed', { id })
-    terminals.delete(id)
-    broadcastStatus(id)
-  })
+  if (t.node) {
+    proc.onData(onData)
+    proc.onExit(() => onTermExit(id, t))
+  } else {
+    t.decoder = new StringDecoder('utf8')
+    proc.stdout.on('data', onData)
+    proc.stderr.on('data', onData)
+    proc.on('exit', () => onTermExit(id, t))
+  }
   broadcastStatus(id)
   return t
+}
+
+function writeTerm(t, data) {
+  try {
+    if (t.node) t.proc.write(data)
+    else t.proc.stdin.write(data)
+  } catch { /* */ }
+}
+
+function onTermExit(id, t) {
+  t.dead = true
+  io?.to('term:' + id).emit('term:closed', { id })
+  if (terminals.get(id) === t) terminals.delete(id)
+  broadcastStatus(id)
 }
 
 function stopTerminal(id) {
@@ -339,7 +378,7 @@ export function attachEngine(httpServer, opts = {}) {
       if (!findServer(id)) return cb({ ok: false, error: 'Server tidak ditemukan' })
       socket.join('term:' + id)
       const t = ensureTerminal(id)
-      cb({ ok: true, pty: t.pty, backlog: t.backlog })
+      cb({ ok: true, pty: true, node: !!t.node, cols: t.cols, rows: t.rows, backlog: t.backlog })
     })
 
     socket.on('terminal:input', ({ id, data }) => {
@@ -350,7 +389,26 @@ export function attachEngine(httpServer, opts = {}) {
         if (t.inputBuf.length < 64) t.inputBuf.push(String(data))
         return
       }
-      try { t.proc.stdin.write(data) } catch { /* */ }
+      writeTerm(t, String(data))
+    })
+
+    // sinkronin winsize PTY sama ukuran layar xterm di browser
+    socket.on('terminal:resize', ({ id, cols, rows }, cb) => {
+      const t = terminals.get(id)
+      if (!t) return cb?.({ ok: false, error: 'Terminal mati' })
+      const c = Math.max(2, Math.min(500, Math.floor(Number(cols)) || t.cols))
+      const r = Math.max(2, Math.min(300, Math.floor(Number(rows)) || t.rows))
+      try {
+        if (t.node) {
+          if (c !== t.cols || r !== t.rows) { t.cols = c; t.rows = r; t.proc.resize(c, r) }
+          cb?.({ ok: true })
+        } else {
+          // fallback `script`: winsize gak bisa diubah (keterbatasan wrapper)
+          cb?.({ ok: true, fixed: true })
+        }
+      } catch (e) {
+        cb?.({ ok: false, error: e?.message || 'resize gagal' })
+      }
     })
 
     socket.on('disconnecting', () => {

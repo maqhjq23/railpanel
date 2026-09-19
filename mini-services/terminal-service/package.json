@@ -1,0 +1,11 @@
+{
+  "name": "terminal-service",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "dev": "bun --hot index.js"
+  },
+  "dependencies": {
+    "socket.io": "^4.8.3"
+  }
+}

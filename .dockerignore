@@ -1,0 +1,17 @@
+node_modules
+.next
+data
+db
+download
+upload
+skills
+scripts
+tests
+.zscripts
+mini-services/node_modules
+dev.log
+server.log
+*.log
+.env
+Dockerfile
+.dockerignore

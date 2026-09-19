@@ -1,0 +1,11 @@
+{
+  "servers": [
+    {
+      "id": "6e8629986e22",
+      "name": "Tes E2E Bot",
+      "startCommand": "echo halo dari proses && sleep 60",
+      "env": {},
+      "createdAt": "2026-09-19T15:25:27.630Z"
+    }
+  ]
+}

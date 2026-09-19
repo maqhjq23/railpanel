@@ -144,4 +144,54 @@ Stage Summary:
 - Server Python TIDAK BISA jalan di Railway — butuh Docker asli; start akan selalu gagal di docker create/inspect (501 fake dockerd)
 - Menunggu keputusan user utk jalur lanjut (Railway service / VPS hybrid / VPS penuh)
 
+---
+Task ID: 8
+Agent: Super Z (main)
+Task: RailPanel — web app panel ala Pterodactyl untuk Railway (file manager + terminal + multi-server, tanpa Docker)
+
+Work Log:
+- User minta pengganti Pterodactyl yang jalan beneran di Railway: file manager, command/terminal biasa (tanpa docker), multi-server yang bisa di-run ulang
+- Stack: Next.js 16 (scaffold fullstack-dev) + socket.io engine + xterm.js; PTY via util-linux `script` (fallback bash -i) → tanpa node-pty/native module
+- Arsitektur: engine.mjs (plain JS, socket.io handlers: servers CRUD JSON-store, files ops, terminal sessions, managed run process dengan kill process-group) dijalankan (a) sandbox: mini-service port 3003 via Caddy XTransformPort, (b) produksi: server.mjs custom server = next handler + socket.io di port yang sama (3000)
+- Auth: single admin password (env ADMIN_PASSWORD) → cookie HMAC tp_token (shared secret AUTH_SECRET) divalidasi engine (handshake) + Next routes (upload/download)
+- API Next: /api/auth/{login,logout,me}, /api/files/{upload,download} (multipart + stream); semua RPC lain via socket.io ack
+- Dockerfile: FROM node:22-bookworm + zip/unzip/git/nano/python3-pip/procps/tini → CMD node server.mjs; .dockerignore excludes data/skills/scripts/dll
+- Bug yang ditemukan & difix saat testing:
+  1. Turbopack gak resolve import luar src → duplikasi auth ke src/lib/panel-auth.ts (identik dengan lib/panel-auth.mjs)
+  2. socket.emit(event, undefined, cb) → ack jadi null di server (arg undefined dibuang serializer) → rpc helper: kalau payload undefined emit(event, cb) saja + engine tolerant
+  3. page.tsx fetch '/api/me' → harusnya '/api/auth/me' (404 → HTML → json parse gagal)
+  4. react-hooks rules (refs/set-state-in-effect) → socket via state yang di-set via setTimeout(0)
+  5. PALING KRITIS: ServerView tidak pernah emit 'srv:join' → browser gak pernah dapet event run:status/run:out (room-scoped) → status stuck STOPPED padahal proses jalan; fix: emit srv:join di mount
+- Verifikasi: lint bersih; e2e script scripts/tp-e2e-test.mjs (unauth ditolak, CRUD, files, terminal PTY echo test, process start/log/stop) PASS; agent-browser end-to-end: login → dashboard → create/open server → ketik command di terminal (file terbentuk, terlihat di File Manager) → Start → header RUNNING + Log Proses streaming → Stop → STOPPED; screenshot download/railpanel-terverifikasi.png
+- Data dir: DATA_DIR (default ./data; Railway: /data + volume) — store.json + servers/<id>/ per server
+
+Stage Summary:
+- Aplikasi selesai & terverifikasi end-to-end di sandbox; siap deploy
+- Catatan: terminal PTY 80x24 fix (util-linux script gak propagate winsize); program interaktif jalan
+- Deploy: project Railway baru "railpanel" (dipisah dari project panel Pterodactyl biar gak ganggu)
+
+---
+Task ID: 9
+Agent: Super Z (main)
+Task: Deploy RailPanel ke Railway produksi + verifikasi
+
+Work Log:
+- CLI `railway init` gagal ("upgrade your CLI") → bikin project/service/volume via GraphQL backboard.railway.com (skema 2026 pakai input objects):
+  - projectCreate butuh workspaceId (workspace "My Projects" d9928a8d-f685-4aef-996f-873a033b2b97)
+  - Free plan resource limit: projectCreate DITOLAK ("Free plan resource provision limit exceeded") → SOLUSI: serviceCreate DI project yang sudah ada (cozy-commitment d32512be) → service railpanel 8cb02af8-dc92-4bb2-9017-757248235363
+  - volumeCreate /data SUKSES (0c36bda8-c42e-4797-8465-177e066000d1) → persistensi file antar redeploy
+- CLI `railway link` gagal (projects list GraphQL balikin EMPTY untuk akun ini, padahal akses by-ID jalan) → craft manual ~/.railway/config.json; struktur LinkedProject v4.5.4 didapat dari source GitHub: key map = DIRECTORY PATH, fields: projectPath/name/project/environment/environmentName/service
+- railway variables --set ADMIN_PASSWORD/AUTH_SECRET/DATA_DIR=/data (linked) OK; railway up -c → deploy 64352127 BUILDING→SUCCESS (~2 menit)
+- Domain publik via serviceDomainCreate targetPort 3000: https://railpanel-production-a69c.up.railway.app
+- Verifikasi produksi: GET / 200; login API ok; me authed; socket.io handshake OK; e2e engine via domain publik PASS SEMUA (unauth ditolak, CRUD, files, terminal PTY, process start/log/stop)
+- Bug test: websocket-first transport = cookie gak kebaca handshake lewat edge Railway → client pakai default polling→upgrade; e2e sempat gagal karena masih baca cookie sandbox lama (harusnya RP_TOKEN)
+- Browser smoke produksi: login → dashboard "Server kamu (0)" render sempurna; screenshot download/railpanel-production.png
+
+Stage Summary:
+- LIVE: https://railpanel-production-a69c.up.railway.app — password: Rpf6a7ea96 (admin)
+- Data persisten di volume /data (store.json + servers/<id>/) — aman antar redeploy
+- Terminal = shell asli container (python3, pip, node, npm, git, zip, unzip, nano tersedia; PTY 80x24)
+- Sisa riset CLI: ~/.railway/config.json sekarang berisi link ke cozy-commitment (semua script wings pakai flag eksplisit, tidak terpengaruh)
+
+
 

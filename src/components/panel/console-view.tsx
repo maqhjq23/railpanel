@@ -196,7 +196,10 @@ class AnsiToHtml {
   }
 
   render(): string {
-    return this.lines.join('\n') + this.cur
+    // setiap elemen lines[] selalu diakhiri newline asli (pushLine cuma dipanggil saat \n),
+    // jadi antara baris terakhir dan cur (baris yg lagi ditulis) WAJIB ada '\n' —
+    // kalau gak, prompt bakal nempel ke output terakhir (bug "test.pyroot@...")
+    return (this.lines.length ? this.lines.join('\n') + '\n' : '') + this.cur
   }
 }
 

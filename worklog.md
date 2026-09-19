@@ -289,3 +289,25 @@ Stage Summary:
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Catatan deploy: restart kontainer = semua terminal mati (efemeral); paket apt yang user install juga hilang saat redeploy
 - Script baru: tp-poll-deploy.sh, tp-pty-check.mjs (verifikasi node-pty/resize), tp-debug-connect.mjs, tp-debug-term.mjs (debug)
+
+---
+Task ID: 14
+Agent: Super Z (main)
+Task: Fix bug console: prompt nempel ke output ("run.log  test.pyroot@...")
+
+Work Log:
+- Laporan user: setelah `ls`, output & prompt berikutnya nempel satu baris (test.pyroot@5d4f8d4e75bd:~#)
+- Repro lokal via scripts/tp-ansi-cr-test.mjs (replika AnsiToHtml + 9 skenario split chunk) -> 8/9 FAIL, root cause ketemu
+- ROOT CAUSE: AnsiToHtml.render() = `lines.join('\n') + cur` — GAK ada separator '\n' antara baris terakhir lines[] dan cur (baris yang lagi ditulis). Setiap pushLine dipicu '\n' (baris di lines[] selalu "diakhiri newline"), jadi kalau output diakhiri \r\n lalu prompt nyusul -> prompt nempel ke output. Deterministik (selalu kejadian), kelewat pas visual test Task 13
+- FIX (console-view.tsx render()): `(lines.length ? lines.join('\n') + '\n' : '') + cur` — ada '\n' sebelum cur, tanpa trailing newline palsu pas log kosong
+- Test rerun: 9/9 PASS (1 chunk utuh, per-event, split setelah/sebelum \r, split tengah CRLF, CRLF 3 chunk, \r & \n sendirian, OSC prompt kebelah, CRLF dengan span warna)
+- Typecheck: error TS cuma di folder skills/ (sistem, bukan app) — src bersih
+- Deploy: railway up --ci -> deployment 2e1720d2 SUCCESS (build Ubuntu + node-pty, +-15 menit)
+- Verifikasi produksi (scripts/tp-newline-check.mjs BARU): (1) login /api/auth/login OK; (2) e2e tp-e2e-test.mjs 10/10 PASS; (3) verifikasi spesifik: kirim "touch run.log; touch test.py; ls" -> data mentah PTY punya \r\n antara output & prompt (engine OK), renderer BARU pisah baris benar, renderer LAMA reproduksi bug "test.pyroot@" persis (pembanding valid) -> VERIFIKASI PASS
+- Server test "Tes Newline" dibuat lalu dihapus (panel user gak diutak-atik)
+
+Stage Summary:
+- Bug "prompt nempel ke output" FIXED + terverifikasi produksi (data & renderer)
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Script baru: tp-ansi-cr-test.mjs (unit repro renderer), tp-newline-check.mjs (verifikasi produksi)
+- Catatan login e2e: endpoint bener /api/auth/login (bukan /api/login)

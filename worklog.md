@@ -48,3 +48,24 @@ Stage Summary:
 - Catatan auth: panel ini pakai snake_case di application API; PATCH node butuh full payload
 - Railway CLI v4: tidak ada command workspace; project token TIDAK bisa untuk auth CLI (hanya RAILWAY_TOKEN env untuk run/up)
 
+---
+Task ID: 3
+Agent: Super Z (main)
+Task: Script Termux interaktif untuk re-setup wings (jaga-jaga)
+
+Work Log:
+- Konteks berubah: container panel RESTART (filesystem selamat, DB MariaDB eksternal persisten); panel sekarang ENFORCE 2FA (semua page/API redirect ke /account, setting di DB, bukan env var)
+- Wings sempat FATAL lagi: saat user bikin server, panel push config ke wings → api.port=443 + ssl=true (mengikuti node DB) → crash karena sertifikat letsencrypt tidak ada
+- SOLUSI SELF-HEALING: /usr/local/bin/wings-safe.sh (wrapper: cp config.master.yml → config.yml lalu exec wings); supervisord [program:wings] command → wrapper; push panel yang merusak otomatis di-restore saat restart berikutnya
+- Wings RUNNING lagi, lokal 200 + via https://panel-production-4218.up.railway.app/api/system 200
+- Script Termux v2: download/wings-termux-setup.sh — interaktif (read -p + default), self-contained (fake_docker.py + wrapper di-embed base64), TIDAK butuh API panel (2FA-proof), kredensial node = input default, verifikasi akhir pakai curl domain publik
+- Bug yang ditemukan & difix saat testing: RAILWAY_VERSION harus di-export sebelum pipe ke sh (bukan di curl); sandbox menghapus $HOME antar sesi (CLI auto-reinstall via script OK)
+- Test end-to-end non-interaktif (pipe newline): SEMUA HIJAU — CLI install, auth, wings binary, config master, fake dockerd, wrapper, supervisord, lokal 200, publik 200
+
+Stage Summary:
+- Deliverable: /home/z/my-project/download/wings-termux-setup.sh (chmod +x, tested end-to-end)
+- Kondisi live: wings RUNNING (wrapper self-healing), node DB benar, domain publik 200 — dot hijau tinggal terlihat setelah user enroll 2FA di /account
+- Script lama download/wings-railway-setup.sh = superseded oleh wings-termux-setup.sh
+- Keamanan: script mengandung token Railway + node token + password admin → jangan disebar
+
+

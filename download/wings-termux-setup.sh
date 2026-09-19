@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 # ==============================================================
-#  WINGS RAILWAY SETUP v2 — Termux Edition
+#  WINGS RAILWAY SETUP v3 — Termux Edition
+#  v3: cek DNS/internet sebelum auth + auto-retry jaringan
+#      + auto-benerin DNS (resolv-conf) + shim getconf
 #  ------------------------------------------------------------
 #  Re-install Wings + Fake Docker daemon di container panel
 #  Pterodactyl (Railway). Jalankan lagi SETIAP KALI service
@@ -26,6 +28,27 @@ ok()   { echo -e "${G}[+]${N} $1"; }
 warn() { echo -e "${Y}[!]${N} $1"; }
 fail() { echo -e "${R}[x] $1${N}"; exit 1; }
 
+# pola error jaringan (buat bedain "internet bermasalah" vs "token salah")
+NET_PAT='dns error|error sending request|Failed to fetch|Try again|Temporary failure|timed out|timeout|connection refused|Connection reset|unreachable|No address associated|Name or service not known'
+
+die_net() {
+  echo
+  echo -e "${R}[x] HP lo GAGAL ngobrol sama server Railway (backboard.railway.com)${N}"
+  echo -e "${R}    Ini masalah DNS/internet di HP, BUKAN token lo.${N}"
+  echo -e "    Token aman & belum dipakai login ke mana-mana."
+  echo
+  echo -e "${Y}    Coba salah satu ini, lalu jalanin script lagi:${N}"
+  echo -e "     1. Mode pesawat ON 10 detik -> OFF (refresh koneksi)"
+  echo -e "     2. Ganti jaringan: WiFi <-> kuota data"
+  echo -e "     3. Android: Settings > Network > Private DNS > hostname -> isi ${B}dns.google${N}"
+  echo -e "        (atau ${B}one.one.one.one${N})"
+  echo -e "     4. VPN/proxy jalan? matiin dulu, atau: ${B}export HTTPS_PROXY=http://127.0.0.1:PORT${N}"
+  echo -e "     5. Tes manual: ${B}curl -s -o /dev/null -w '%{http_code}' https://backboard.railway.com/${N}"
+  echo -e "        keluar angka (200/403/404) = konek, tinggal jalanin script lagi"
+  echo
+  exit 1
+}
+
 ask() { # ask VAR "pertanyaan" "default"
   local v
   read -r -p "$(echo -e "${B}?$N $2 ${Y}[${3:-}]: ${N}")" v
@@ -36,7 +59,7 @@ ask() { # ask VAR "pertanyaan" "default"
 
 echo -e "${B}"
 echo "  ============================================"
-echo "   WINGS RAILWAY SETUP v2 (Termux)"
+echo "   WINGS RAILWAY SETUP v3 (Termux)"
 echo "   wings + fake dockerd + self-healing"
 echo "  ============================================"
 echo -e "${N}"
@@ -61,16 +84,43 @@ echo; echo -e "${Y}--- DEPENDENCY ---${N}"
 command -v curl   >/dev/null 2>&1 || fail "pkg install curl -y"
 command -v base64 >/dev/null 2>&1 || fail "pkg install coreutils -y"
 
+# pkg opsional: getconf (buat installer railway) + resolv-conf (bantu DNS)
+pkg install -y getconf resolv-conf >/dev/null 2>&1 || true
+# shim getconf kalau paketnya gak tersedia (biar installer railway gak lotso)
+if ! command -v getconf >/dev/null 2>&1 && [ -n "$PREFIX" ]; then
+  case "$(uname -m)" in *64*) LB=64 ;; *) LB=32 ;; esac
+  mkdir -p "$PREFIX/bin"
+  printf '#!/data/data/com.termux/files/usr/bin/sh\ncase "$1" in LONG_BIT) echo %s;; *) : ;; esac\n' "$LB" > "$PREFIX/bin/getconf"
+  chmod +x "$PREFIX/bin/getconf" && info "Shim getconf dibuat (LONG_BIT=$LB)"
+fi
+
 export PATH="$HOME/.railway/bin:$PATH"
+export RAILWAY_NO_TELEMETRY=1
 if ! command -v railway >/dev/null 2>&1; then
   info "Install Railway CLI (pinned 4.5.4)..."
   export RAILWAY_VERSION=4.5.4
   curl -fsSL https://railway.app/install.sh | sh || fail "Gagal install railway CLI"
   unset RAILWAY_VERSION
   export PATH="$HOME/.railway/bin:$PATH"
+  hash -r
 fi
 grep -q '.railway/bin' ~/.bashrc 2>/dev/null || echo 'export PATH="$HOME/.railway/bin:$PATH"' >> ~/.bashrc
 ok "Railway CLI: $(railway --version)"
+
+# ---------------- CEK JARINGAN ----------------
+echo; echo -e "${Y}--- CEK JARINGAN (DNS HP -> API Railway) ---${N}"
+NET_OK=0
+for i in 1 2 3 4 5; do
+  CODE=$(curl -s -o /dev/null -w '%{http_code}' --connect-timeout 8 --max-time 20 https://backboard.railway.com/ 2>"$HOME/.dnserr")
+  if [ -n "$CODE" ] && [ "$CODE" != "000" ]; then
+    NET_OK=1; ok "API Railway terjangkau (HTTP $CODE, percobaan $i/5)"; break
+  fi
+  warn "DNS/internet bermasalah (percobaan $i/5): $(head -1 "$HOME/.dnserr" 2>/dev/null)"
+  [ "$i" = "2" ] && { info "Coba perbaiki DNS otomatis (resolv-conf)..."; pkg install -y resolv-conf >/dev/null 2>&1 || true; }
+  sleep 3
+done
+rm -f "$HOME/.dnserr"
+[ "$NET_OK" = "1" ] || die_net
 
 # ---------------- AUTH RAILWAY ----------------
 echo; echo -e "${Y}--- AUTH RAILWAY ---${N}"
@@ -84,11 +134,32 @@ cat > ~/.railway/config.json <<EOF
   "newVersionAvailable": null
 }
 EOF
-WHO=$(railway whoami 2>&1) || fail "Token Railway ditolak: $WHO"
+AUTH_OK=0
+for i in 1 2 3 4 5; do
+  WHO=$(railway whoami 2>&1) && { AUTH_OK=1; break; }
+  if printf '%s' "$WHO" | grep -qiE "$NET_PAT"; then
+    warn "Jaringan flaky ke API Railway (percobaan $i/5), retry..."
+    sleep 5
+  else
+    fail "Token Railway ditolak oleh server: $WHO"
+  fi
+done
+[ "$AUTH_OK" = "1" ] || die_net
 ok "$WHO"
 
 ssh_cmd() {
-  railway ssh --project="$PROJECT_ID" --environment="$ENV_ID" --service="$SERVICE_ID" -- "$1"
+  local out rc i
+  for i in 1 2 3; do
+    out=$(railway ssh --project="$PROJECT_ID" --environment="$ENV_ID" --service="$SERVICE_ID" -- "$1" 2>&1); rc=$?
+    [ $rc -eq 0 ] && { printf '%s\n' "$out"; return 0; }
+    if printf '%s' "$out" | grep -qiE "$NET_PAT"; then
+      warn "Koneksi ke Railway flaky (percobaan $i/3), retry 5 detik..."
+      sleep 5
+    else
+      printf '%s\n' "$out"; return $rc
+    fi
+  done
+  printf '%s\n' "$out"; return $rc
 }
 
 # ---------------- SETUP CONTAINER ----------------

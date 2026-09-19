@@ -68,4 +68,24 @@ Stage Summary:
 - Script lama download/wings-railway-setup.sh = superseded oleh wings-termux-setup.sh
 - Keamanan: script mengandung token Railway + node token + password admin → jangan disebar
 
+---
+Task ID: 4
+Agent: Super Z (main)
+Task: Fix script Termux v3 — gagal di AUTH karena DNS HP (EAI_AGAIN ke backboard.railway.com)
+
+Work Log:
+- Laporan user: script v2 mati saat `railway whoami` — "dns error: failed to lookup address information: Try again" ke backboard.railway.com; install CLI dari GitHub sukses detik sebelumnya → DNS HP flaky, BUKAN token salah
+- Riset binary CLI 4.5.4 (strings): TIDAK ada env override endpoint (hanya RAILWAY_TOKEN/RAILWAY_API_TOKEN/RAILWAY_ENV/RAILWAY_SHELL) → fallback endpoint bukan opsi
+- Patch v3 ke download/wings-termux-setup.sh:
+  1. Pre-flight "CEK JARINGAN": curl ke backboard.railway.com 5x percobaan (sleep 3), auto `pkg install resolv-conf` di percobaan ke-2, gagal total → die_net() dengan panduan (mode pesawat, ganti jaringan, Private DNS dns.google/one.one.one.one, HTTPS_PROXY, tes curl manual)
+  2. whoami: retry 5x, klasifikasi error via NET_PAT (dns/timeout/connection) = retry; error lain = token ditolak → fail
+  3. ssh_cmd: auto-retry 3x utk error jaringan (jaga-jaga DNS flaky di tengah proses)
+  4. Shim getconf (LONG_BIT) kalau pkg getconf tidak ada → hilangkan warning installer; + RAILWAY_NO_TELEMETRY=1 + hash -r
+- bash -n OK; tes end-to-end non-interaktif (pipe newline) di sandbox: SEMUA HIJAU — auth "Logged in as f4rohr62@thindle.shop", 6/6 langkah, wings RUNNING, API lokal 200, publik 200 (container tidak redeploy, uptime 31 menit)
+
+Stage Summary:
+- Deliverable final: /home/z/my-project/download/wings-termux-setup.sh v3 (chmod +x, tested)
+- Root cause error user = DNS resolver HP timeout ke backboard.railway.com; solusi di sisi user: toggle jaringan / Private DNS; script sekarang auto-retry + panduan troubleshooting jelas
+- CLI 4.5.4 tidak bisa diarahkan ke endpoint lain (tidak ada env var) — terkonfirmasi dari binary
+
 

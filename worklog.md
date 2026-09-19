@@ -311,3 +311,20 @@ Stage Summary:
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Script baru: tp-ansi-cr-test.mjs (unit repro renderer), tp-newline-check.mjs (verifikasi produksi)
 - Catatan login e2e: endpoint bener /api/auth/login (bukan /api/login)
+
+---
+Task ID: 15
+Agent: Super Z (main)
+Task: Checkpoint backup project ke Gofile (setelah fix console newline)
+
+Work Log:
+- Arsip baru: railpanel-backup-2026-09-20-console-fix.zip = 3.2 MB, 715 files, unzip -t OK
+- Perbaikan exclude dibanding Task 11: "*node_modules/*" (nested, 442 file mini-services/terminal-service/node_modules nyelip sebelumnya) + "*.zip" (backup lama gak ikut dobel) + download/
+- Upload via scripts/tp_backup_gofile.sh, REUSE guest token Task 11 (T335UlEb1Vn7i35H12XkG0mYIinVLDHB) — satu account manage semua backup
+- Verifikasi: MD5 lokal = MD5 server (7060f6f2b2d20f02d8dfc39e556444b9)
+
+Stage Summary:
+- BACKUP LIVE: https://gofile.io/d/92C4OqA9 (railpanel-backup-2026-09-20-console-fix.zip, 3.2 MB, 715 files)
+- Isi = kondisi terbaru: fix console newline (Task 14) + semua Task sebelumnya
+- PERINGATAN: arsip mengandung kredensial (.env, worklog: token Railway, password panel, token gofile) -> link JANGAN disebar
+- Backup lama masih ada: https://gofile.io/d/IzRIXtuP (2.0 MB, kondisi Task 11)

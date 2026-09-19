@@ -128,4 +128,20 @@ Stage Summary:
 - Re-enable kapan saja: Admin Area > Settings > Security > Require 2FA (atau ubah value ke 1/2 di DB)
 - Script bantu tersimpan: scripts/ptero_ssh_run.sh (helper eksekusi script remote di container)
 
+---
+Task ID: 7
+Agent: Super Z (main)
+Task: Diagnosa server Python user di panel yang gagal start
+
+Work Log:
+- User tanya "panel python gak jalan kenapa"
+- Diagnosa via ptero_ssh_run.sh: server EXISTS di DB (uuid 62b61bd0-1c18-4dd4-beca-dcce83d7c7ae, egg 15 Python-Universal, status kosong); panel versi baru pakai kolom `status` (kolom `installed` tidak ada)
+- Wings log: saat Start → onBeforeStart → SyncWithEnvironment → InSituUpdate → docker inspect /containers/<uuid>/json → fake dockerd 501 "not supported" → preflight gagal → start dibatalkan
+- Kesimpulan: batasan platform, bukan salah konfigurasi. Railway memblokir Docker beneran (CapEff tanpa SYS_ADMIN/NET_ADMIN, mount/userns diblok — terverifikasi Task 1); fake dockerd hanya membuat node hijau, tidak bisa create/run container
+- Opsi yang ditawarkan ke user: (1) deploy Python app langsung sebagai Railway service (tanpa panel), (2) Wings + Docker asli di VPS (mis. Oracle Free Tier) dengan panel tetap di Railway → update fqdn node, (3) pindahkan panel+wings sepenuhnya ke VPS
+
+Stage Summary:
+- Server Python TIDAK BISA jalan di Railway — butuh Docker asli; start akan selalu gagal di docker create/inspect (501 fake dockerd)
+- Menunggu keputusan user utk jalur lanjut (Railway service / VPS hybrid / VPS penuh)
+
 

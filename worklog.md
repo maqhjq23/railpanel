@@ -217,3 +217,25 @@ Stage Summary:
 - Model baru: Start = nyalain PTY terminal, Stop = matiin; gak ada auto-run script lagi (run.log lama tetap dihide dari file list)
 - Data lama (store.json dgn startCommand) backward-compatible — field dorman, UI gak nampilin
 - Live: https://railpanel-production-a69c.up.railway.app — password Rpf6a7ea96
+
+---
+Task ID: 11
+Agent: Super Z (main)
+Task: Backup project RailPanel ke Gofile (jaga-jaga)
+
+Work Log:
+- Sumber backup: /home/z/my-project (source RailPanel lengkap: src, lib, mini-services/terminal-service/engine.mjs, scripts, download, .git history 1.9M, .env, Dockerfile, server.mjs, worklog)
+- Exclude: node_modules, .next (182M), skills (61M, folder sistem), upload, dev.log, terminal-service.log, tsconfig.tsbuildinfo
+- Arsip: railpanel-backup-2026-09-20.zip = 2.0 MB, 1003 files, unzip -t OK
+- Upload Gofile via guest account API: POST api.gofile.io/accounts -> token -> POST upload.gofile.io/uploadfile (Bearer token)
+- Bug yang ditemukan & difix saat testing:
+  1. Upload pertama curl exit 28 (hang ~130s) -> root cause HTTP/2 + header Expect: 100-continue -> fix: --http1.1 + -H "Expect:"
+  2. GET /servers hang tanpa auth (timeout 30s) -> skip saja, endpoint upload.gofile.io langsung jalan
+- Script tersimpan: scripts/tp_backup_gofile.sh (guest account + retry 3x, token reuse via arg 2)
+- Verifikasi: md5 lokal = md5 gofile (7e0fb57d625d755c19d01bccd339fc8d), downloadPage HTTP 200
+
+Stage Summary:
+- BACKUP LIVE: https://gofile.io/d/IzRIXtuP (railpanel-backup-2026-09-20.zip, 2.0 MB)
+- Guest account gofile: id fb6b4875-4cbb-4770-a6e7-49136b328630, token T335UlEb1Vn7i35H12XkG0mYIinVLDHB (bisa dipakai manage/delete file)
+- PERINGATAN: arsip mengandung kredensial (.env ADMIN_PASSWORD/AUTH_SECRET, worklog berisi token Railway & password panel) -> link JANGAN disebar
+- Catatan teknis: gofile upload wajib --http1.1 + Expect kosong dari sandbox ini (HTTP/2 hang)

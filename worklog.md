@@ -400,3 +400,27 @@ Stage Summary:
 - Toolbar bersih: File/Folder/Upload/Pilih; aksi Zip/Move tinggal di bar aksi mode select
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Script baru: tp-move-resolve-test.mjs, tp-move-ui-setup.mjs, tp-move-ui-cleanup.mjs
+
+---
+Task ID: 19
+Agent: Super Z (main)
+Task: Manager ronde 4 — hapus auto-fokus (keyboard gak boleh muncul sendiri), fix move yang masih error di /home/test/test, judul editor tanpa "/" + font disamain sama rename
+
+Work Log:
+- AUTO-FOKUS CABUT TOTAL: (1) efek manual setTimeout-focus dari Task 17 dihapus (edit/rename/newFile/newFolder/zipOut/moveTo gak difokus lagi); (2) BARU KETAHUAN sisa fokusnya dari RADIX DIALOG sendiri — onOpenAutoFocus bawaan fokus ke elemen fokusabel pertama (editor = textarea, rename/move = input) → keyboard HP tetap muncul walau efek manual udah dihapus. Fix: onOpenAutoFocus={(e) => e.preventDefault()} di DialogContent utama. Fokus "Lanjut edit" di dialog discard DIBIARIN (klik user eksplisit). Verifikasi browser: document.activeElement = DIV/BUTTON di semua dialog (bukan textarea/input)
+- BUG MOVE (laporan user: home/test/ + file "test", move ".." malah error): root cause = BENTROK NAMA — file "test" dinaikin ke /home yang udah ada FOLDER "test" → fsp.rename file→path folder existing = EISDIR → error. Bukan bug resolveDest (resolve ".."-nya bener). Fix di engine files:move: kalau target udah ada di tujuan → freeName() cari nama bebas "test (1)", "test (2)"... (keep both, ala file manager) + respons sertakan renamed: ["test → test (1)"] → UI toast: "Move sukses — N item dipindah ke /home · di-rename: test → test (1)". Folder bentrok juga kena ("inner → inner (1)")
+- JUDUL EDITOR: "/{dialog.from}" → "{dialog.from}" (garis miring depan hilang, contoh user: "/test.py" → "test.py") + font text-sm → text-base (Geist Mono 16px, sama keluarga font dgn input rename)
+- Deploy: sandbox reset ~/.railway LAGI (CLI+config hilang) → reinstall v4.5.4 (install.sh pakai env RAILWAY_VERSION, bukan flag --version!) + rekonstruksi config.json dari src/config.rs v4.5.4 (user.token nested, projects key path, LinkedProject camelCase) → status tetap error "Environment is deleted" karena CLI match environment by NAMA (environment_name || "Production") dan nama env kita "production" huruf kecil → tambah "environmentName": "production" di config → linked OK (service railpanel 8cb02af8, terkonfirmasi GraphQL deployment.serviceId)
+- Deploy 2x: 7aad9a59 (ronde 4 awal) + ae0d981f (setelah ketahuan Radix masih auto-fokus) — dua-duanya SUCCESS
+- Verifikasi produksi: tp-move-collision-test.mjs BARU 9/9 PASS (skenario user persis: home/test/test move ke home → sukses "test (1)", collision kedua "test (2)", folder "inner (1)", move normal tanpa rename); tp-files-test 9/9 PASS; tp-e2e 10/10 PASS
+- Browser smoke: editor focus DIV + judul "home/contoh/a.txt" (mono 16px); rename focus BUTTON; dialog move focus BUTTON; Location ".." → "/home" + submit → toast "Move sukses" → b.txt beneran di /home ✓; move nama relatif "home" dari root → Location "/home" → a.txt ke /home ✓ (screenshot rp-editor-title-new.png, rp-move-location2.png). Catatan test: locator find --name "Move" bisa KLIK DOBEL (bar aksi + tombol submit dialog namanya sama) — pakai eval + filter !closest('[role=dialog]'); jangan kira error "Folder tujuan gak ada" itu bug — cek dulu foldernya beneran ada
+- Cleanup: server "Tes Move UI" + "Tes Move Collision" dihapus, panel tersisa DanzPro
+- Commit: 7a690c7
+
+Stage Summary:
+- 4 permintaan ronde 4 selesai + terverifikasi produksi
+- Auto-fokus benar-benar mati (efek manual + Radix bawaan) — keyboard gak muncul sendiri di semua dialog
+- Move anti-percoyo: dest relatif folder sekarang + bentrok nama auto-rename "nama (1)" + toast info rename
+- Judul editor: tanpa "/" depan, font mono 16px sama dgn rename
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Catatan: config Railway sekarang WAJIB ada "environmentName": "production" (CLI match by nama!); script baru: tp-move-collision-test.mjs

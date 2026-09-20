@@ -2,11 +2,15 @@
 
 // FileExplorer — file manager RailPanel.
 // - Toolbar gaya "laci": bisa digeser horizontal kalau muat gak (HP).
-// - Mode multi-select: Zip (kompres) & Move (pindah) dengan checkbox per item.
-// - Tombol per item: file = edit/rename/hapus/download, folder = rename/hapus,
-//   .zip = extract.
-// - Editor: textarea wrap bener (teks panjang gak keluar batas dialog).
-import { useCallback, useEffect, useRef, useState } from 'react'
+// - Mode select (checkbox per item): Pilih / Zip / Move masuk mode yang sama;
+//   bar aksi di bawahnya: Kompres, Move, Hapus, Extract + Batal.
+// - Tombol per item: file = edit/download/rename/hapus, folder = rename/hapus,
+//   .zip = extract — extract SELALU lewat dialog konfirmasi dulu.
+// - Editor: gutter nomor baris (virtualized, sinkron scroll) + textarea
+//   no-wrap (teks panjang scroll horizontal, gak nembus batas) +
+//   guard "perubahan belum disimpan" kalau ditutup dalam kondisi dirty +
+//   auto-focus keyboard.
+import { useCallback, useEffect, useRef, useState, type UIEvent as ReactUIEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Checkbox } from '@/components/ui/checkbox'
@@ -30,6 +34,7 @@ import {
   FolderOutput,
   FolderPlus,
   Folder,
+  ListChecks,
   Loader2,
   Pencil,
   SquarePen,
@@ -44,13 +49,17 @@ type DialogMode =
   | { kind: 'rename'; from: string }
   | { kind: 'delete'; from: string }
   | { kind: 'edit'; from: string }
+  | { kind: 'extract'; from?: string } // from = single (per-item); tanpa from = massal (sel)
+  | { kind: 'delSel' }
   | { kind: 'zipOut' }
   | { kind: 'moveTo' }
 
-type SelMode = 'none' | 'zip' | 'move'
-
 const btnBar =
   'h-8 shrink-0 whitespace-nowrap border-zinc-800 bg-zinc-900 hover:bg-zinc-800'
+const btnSel = 'h-8 shrink-0 whitespace-nowrap bg-emerald-600 hover:bg-emerald-500'
+
+const ROW_H = 20 // px — HARUS match lineHeight editor & gutter
+const LINE_STYLE = { lineHeight: '20px' }
 
 export default function FileExplorer({ socket, serverId }: { socket: any; serverId: string }) {
   const [cwd, setCwd] = useState('.')
@@ -59,11 +68,18 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
   const [dialog, setDialog] = useState<DialogMode>({ kind: 'none' })
   const [inputValue, setInputValue] = useState('')
   const [editContent, setEditContent] = useState('')
+  const [origContent, setOrigContent] = useState('') // buat deteksi dirty
+  const [confirmDiscard, setConfirmDiscard] = useState(false)
   const [busy, setBusy] = useState(false)
   const [uploading, setUploading] = useState(false)
-  const [selMode, setSelMode] = useState<SelMode>('none')
+  const [selMode, setSelMode] = useState<'none' | 'sel'>('none')
   const [sel, setSel] = useState<Set<string>>(new Set())
+  const [gutStart, setGutStart] = useState(0)
+  const [gutCount, setGutCount] = useState(60)
   const uploadRef = useRef<HTMLInputElement>(null)
+  const inputRef = useRef<HTMLInputElement>(null)
+  const editRef = useRef<HTMLTextAreaElement>(null)
+  const gutRef = useRef<HTMLDivElement>(null)
   const { toast } = useToast()
 
   const load = useCallback(
@@ -85,6 +101,24 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     load(cwd)
   }, [cwd])
 
+  const dlgFrom = 'from' in dialog ? dialog.from : undefined
+
+  // auto-focus: Radix dialog fokusnya ke tombol close X duluan, jadi kita
+  // paksa fokus manual ke input/textarea setelah dialog kebuka.
+  useEffect(() => {
+    const k = dialog.kind
+    if (k === 'none') return
+    const t = setTimeout(() => {
+      if (k === 'edit') {
+        editRef.current?.focus()
+      } else if (k === 'newFile' || k === 'newFolder' || k === 'rename' || k === 'zipOut' || k === 'moveTo') {
+        inputRef.current?.focus()
+        if (k === 'rename') inputRef.current?.select() // nama lama ke-highlight semua
+      }
+    }, 120)
+    return () => clearTimeout(t)
+  }, [dialog.kind, dlgFrom])
+
   function join(dir: string, name: string) {
     return dir === '.' ? name : `${dir}/${name}`
   }
@@ -96,7 +130,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     setCwd(dir)
   }
 
-  function enterSelect(mode: SelMode) {
+  function enterSelect(mode: 'none' | 'sel') {
     setSel(new Set())
     setSelMode(mode)
   }
@@ -114,26 +148,29 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     return e.type === 'file' && /\.zip$/i.test(e.name)
   }
 
+  function isZipPath(p: string) {
+    return /\.zip$/i.test(p.split('/').pop() || '')
+  }
+
   function openFile(p: string) {
     rpc<{ content: string }>(socket, 'files:read', { id: serverId, path: p })
       .then((res) => {
         setInputValue('')
         setEditContent(res.content)
+        setOrigContent(res.content)
+        setGutStart(0)
+        setGutCount(60)
         setDialog({ kind: 'edit', from: p })
       })
       .catch((e) => toast({ title: 'Gagal baca file', description: (e as Error).message, variant: 'destructive' }))
   }
 
-  async function doExtract(e: FileEntry) {
-    setBusy(true)
-    try {
-      await rpc(socket, 'files:extract', { id: serverId, path: join(cwd, e.name) })
-      toast({ title: 'Extract sukses', description: e.name })
-      await load()
-    } catch (err) {
-      toast({ title: 'Extract gagal', description: (err as Error).message, variant: 'destructive' })
-    } finally {
-      setBusy(false)
+  // tutup dialog utama — kalau editor dirty, minta konfirmasi dulu
+  function closeMain() {
+    if (dialog.kind === 'edit' && editContent !== origContent) {
+      setConfirmDiscard(true)
+    } else {
+      setDialog({ kind: 'none' })
     }
   }
 
@@ -150,6 +187,46 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         await rpc(socket, 'files:delete', { id: serverId, path: dialog.from })
       } else if (dialog.kind === 'edit') {
         await rpc(socket, 'files:write', { id: serverId, path: dialog.from, content: editContent })
+      } else if (dialog.kind === 'extract') {
+        const targets = dialog.from
+          ? [dialog.from]
+          : Array.from(sel).filter((p) => isZipPath(p))
+        let okN = 0
+        let lastErr = ''
+        for (const t of targets) {
+          try {
+            await rpc(socket, 'files:extract', { id: serverId, path: t })
+            okN++
+          } catch (err) {
+            lastErr = (err as Error).message
+          }
+        }
+        if (okN === 0) throw new Error(lastErr || 'Extract gagal')
+        if (okN < targets.length) {
+          toast({ title: `Extract sebagian (${okN}/${targets.length})`, description: lastErr, variant: 'destructive' })
+        } else {
+          toast({
+            title: 'Extract sukses',
+            description: targets.length === 1 ? targets[0].split('/').pop() : `${okN} arsip`,
+          })
+        }
+        if (!dialog.from) enterSelect('none')
+      } else if (dialog.kind === 'delSel') {
+        const targets = Array.from(sel)
+        let okN = 0
+        let lastErr = ''
+        for (const p of targets) {
+          try {
+            await rpc(socket, 'files:delete', { id: serverId, path: p })
+            okN++
+          } catch (err) {
+            lastErr = (err as Error).message
+          }
+        }
+        if (okN < targets.length) {
+          toast({ title: `Hapus sebagian (${okN}/${targets.length})`, description: lastErr, variant: 'destructive' })
+        }
+        enterSelect('none')
       } else if (dialog.kind === 'zipOut') {
         await rpc(socket, 'files:zip', { id: serverId, items: Array.from(sel), out: join(cwd, inputValue) })
         enterSelect('none') // reset mode + seleksi
@@ -188,8 +265,21 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     }
   }
 
+  // sinkron gutter nomor baris ke scroll textarea + update rentang nomor yang dirender
+  function onEditScroll(e: ReactUIEvent<HTMLTextAreaElement>) {
+    const el = e.currentTarget
+    if (gutRef.current) gutRef.current.scrollTop = el.scrollTop
+    const start = Math.max(0, Math.floor(el.scrollTop / ROW_H) - 10)
+    const count = Math.ceil(el.clientHeight / ROW_H) + 30
+    setGutStart((s) => (s === start ? s : start))
+    setGutCount((c) => (c === count ? c : c))
+  }
+
   const crumbs = cwd === '.' ? [] : cwd.split('/')
   const selecting = selMode !== 'none'
+  const selPaths = Array.from(sel)
+  const selZip = selPaths.filter((p) => isZipPath(p))
+  const lineCount = dialog.kind === 'edit' ? Math.max(1, editContent.split('\n').length) : 1
 
   return (
     <div className="space-y-3">
@@ -233,18 +323,26 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
             {uploading ? <Loader2 className="h-4 w-4 animate-spin" /> : <Upload className="h-4 w-4" />} Upload
           </Button>
           <Button
-            variant={selMode === 'zip' ? 'default' : 'outline'}
+            variant={selecting ? 'default' : 'outline'}
             size="sm"
-            className={selMode === 'zip' ? 'h-8 shrink-0 whitespace-nowrap bg-emerald-600 hover:bg-emerald-500' : btnBar}
-            onClick={() => (selMode === 'zip' ? enterSelect('none') : enterSelect('zip'))}
+            className={selecting ? btnSel : btnBar}
+            onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
+          >
+            <ListChecks className="h-4 w-4" /> Pilih
+          </Button>
+          <Button
+            variant={selecting ? 'default' : 'outline'}
+            size="sm"
+            className={selecting ? btnSel : btnBar}
+            onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
           >
             <Archive className="h-4 w-4" /> Zip
           </Button>
           <Button
-            variant={selMode === 'move' ? 'default' : 'outline'}
+            variant={selecting ? 'default' : 'outline'}
             size="sm"
-            className={selMode === 'move' ? 'h-8 shrink-0 whitespace-nowrap bg-emerald-600 hover:bg-emerald-500' : btnBar}
-            onClick={() => (selMode === 'move' ? enterSelect('none') : enterSelect('move'))}
+            className={selecting ? btnSel : btnBar}
+            onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
           >
             <FolderInput className="h-4 w-4" /> Move
           </Button>
@@ -258,13 +356,49 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         </div>
       </div>
 
-      {/* bar aksi mode select */}
+      {/* bar aksi mode select: Kompres / Move / Hapus / Extract / Batal */}
       {selecting && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-emerald-900/70 bg-emerald-950/30 px-3 py-2">
           <span className="text-xs font-medium text-emerald-300">
-            {sel.size} dipilih — {selMode === 'zip' ? 'kompres jadi zip' : 'pindah ke folder lain'}
+            {sel.size} dipilih{selZip.length > 0 ? ` · ${selZip.length} zip` : ''}
           </span>
-          <div className="ml-auto flex items-center gap-2">
+          <div className="ml-auto flex flex-wrap items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-zinc-800 bg-zinc-950"
+              disabled={sel.size === 0 || busy}
+              onClick={() => { setInputValue('arsip.zip'); setDialog({ kind: 'zipOut' }) }}
+            >
+              <Archive className="mr-1 h-4 w-4" /> Kompres
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-zinc-800 bg-zinc-950"
+              disabled={sel.size === 0 || busy}
+              onClick={() => { setInputValue(''); setDialog({ kind: 'moveTo' }) }}
+            >
+              <FolderInput className="mr-1 h-4 w-4" /> Move
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-zinc-800 bg-zinc-950 text-red-300 hover:bg-red-950/40 hover:text-red-200"
+              disabled={sel.size === 0 || busy}
+              onClick={() => setDialog({ kind: 'delSel' })}
+            >
+              <Trash2 className="mr-1 h-4 w-4" /> Hapus
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-8 border-zinc-800 bg-zinc-950 text-amber-300 hover:bg-amber-950/30 hover:text-amber-200"
+              disabled={selZip.length === 0 || busy}
+              onClick={() => setDialog({ kind: 'extract' })}
+            >
+              <FolderOutput className="mr-1 h-4 w-4" /> Extract
+            </Button>
             <Button
               variant="outline"
               size="sm"
@@ -272,22 +406,6 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
               onClick={() => enterSelect('none')}
             >
               Batal
-            </Button>
-            <Button
-              size="sm"
-              className="h-8 bg-emerald-600 hover:bg-emerald-500"
-              disabled={sel.size === 0 || busy}
-              onClick={() => {
-                if (selMode === 'zip') {
-                  setInputValue('arsip.zip')
-                  setDialog({ kind: 'zipOut' })
-                } else {
-                  setInputValue('')
-                  setDialog({ kind: 'moveTo' })
-                }
-              }}
-            >
-              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : selMode === 'zip' ? 'Kompres' : 'Move'}
             </Button>
           </div>
         </div>
@@ -335,7 +453,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                     <td className="hidden w-28 whitespace-nowrap py-2 pr-2 text-right text-xs text-zinc-600 md:table-cell">
                       {e.mtime ? formatTime(e.mtime) : ''}
                     </td>
-                    <td className="w-28 py-2 pr-2 text-right">
+                    <td className="w-32 py-2 pr-2 text-right">
                       <div className="flex justify-end gap-0.5">
                         {!selecting && isZip(e) && (
                           <button
@@ -343,7 +461,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                             title="Extract zip"
                             disabled={busy}
                             className="rounded p-1 text-zinc-500 hover:bg-zinc-700/50 hover:text-amber-300"
-                            onClick={(ev) => { ev.stopPropagation(); doExtract(e) }}
+                            onClick={(ev) => { ev.stopPropagation(); setDialog({ kind: 'extract', from: p }) }}
                           >
                             <FolderOutput className="h-3.5 w-3.5" />
                           </button>
@@ -406,13 +524,19 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         )}
       </ScrollArea>
 
-      {/* dialog umum: newFile/newFolder/rename/delete/edit/zipOut/moveTo */}
-      <Dialog open={dialog.kind !== 'none'} onOpenChange={(o) => !o && setDialog({ kind: 'none' })}>
+      {/* dialog utama: newFile/newFolder/rename/delete/delSel/edit/extract/zipOut/moveTo */}
+      <Dialog open={dialog.kind !== 'none'} onOpenChange={(o) => { if (!o) closeMain() }}>
         <DialogContent className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden bg-zinc-900 text-zinc-100 sm:max-w-2xl">
-          {dialog.kind === 'delete' ? (
+          {dialog.kind === 'delete' || dialog.kind === 'delSel' ? (
             <>
               <DialogHeader>
-                <DialogTitle className="break-all">Hapus {dialog.from.split('/').pop()}?</DialogTitle>
+                <DialogTitle className="break-all">
+                  {dialog.kind === 'delSel'
+                    ? `Hapus ${sel.size} item terpilih?`
+                    : dialog.kind === 'delete'
+                      ? `Hapus ${dialog.from.split('/').pop()}?`
+                      : ''}
+                </DialogTitle>
               </DialogHeader>
               <p className="text-sm text-zinc-400">Yang dihapus gak bisa dikembalikan.</p>
               <DialogFooter>
@@ -424,20 +548,65 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                 </Button>
               </DialogFooter>
             </>
+          ) : dialog.kind === 'extract' ? (
+            <>
+              <DialogHeader>
+                <DialogTitle className="break-all">
+                  {dialog.from
+                    ? `Extract ${dialog.from.split('/').pop()}?`
+                    : `Extract ${selZip.length} arsip terpilih?`}
+                </DialogTitle>
+              </DialogHeader>
+              <p className="text-sm text-zinc-400">
+                Isi arsip di-extract ke folder ini — file dengan nama yang sama bakal ke-overwrite.
+              </p>
+              <DialogFooter>
+                <Button variant="outline" className="border-zinc-800 bg-zinc-950" onClick={() => setDialog({ kind: 'none' })}>
+                  Batal
+                </Button>
+                <Button className="bg-emerald-600 hover:bg-emerald-500" onClick={submitDialog} disabled={busy}>
+                  {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Extract'}
+                </Button>
+              </DialogFooter>
+            </>
           ) : dialog.kind === 'edit' ? (
             <>
               <DialogHeader>
                 <DialogTitle className="break-all font-mono text-sm">/{dialog.from}</DialogTitle>
               </DialogHeader>
-              <textarea
-                value={editContent}
-                onChange={(e) => setEditContent(e.target.value)}
-                wrap="soft"
-                spellCheck={false}
-                className="h-[55vh] min-h-[300px] w-full min-w-0 max-w-full resize-none overflow-auto rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs leading-relaxed break-all whitespace-pre-wrap text-zinc-200 outline-none focus:border-emerald-700"
-              />
+              <div className="flex h-[55vh] min-h-[300px] w-full overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 focus-within:border-emerald-700">
+                {/* gutter nomor baris — scrollTop disinkron dari textarea */}
+                <div
+                  ref={gutRef}
+                  className="w-12 shrink-0 select-none overflow-hidden border-r border-zinc-800 bg-zinc-950 pt-3 text-right font-mono text-[12px] text-zinc-600"
+                  style={LINE_STYLE}
+                >
+                  <div style={{ height: Math.max(lineCount, gutStart + gutCount) * ROW_H }}>
+                    <div style={{ height: gutStart * ROW_H }} />
+                    {Array.from({ length: gutCount }, (_, i) => {
+                      const n = gutStart + i + 1
+                      if (n > lineCount) return null
+                      return (
+                        <div key={n} className="pr-2" style={{ height: ROW_H }}>
+                          {n}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+                <textarea
+                  ref={editRef}
+                  value={editContent}
+                  onChange={(e) => setEditContent(e.target.value)}
+                  onScroll={onEditScroll}
+                  wrap="off"
+                  spellCheck={false}
+                  className="h-full min-w-0 flex-1 resize-none overflow-auto whitespace-pre bg-transparent px-3 py-3 font-mono text-[12px] text-zinc-200 outline-none"
+                  style={LINE_STYLE}
+                />
+              </div>
               <DialogFooter>
-                <Button variant="outline" className="border-zinc-800 bg-zinc-950" onClick={() => setDialog({ kind: 'none' })}>
+                <Button variant="outline" className="border-zinc-800 bg-zinc-950" onClick={closeMain}>
                   Tutup
                 </Button>
                 <Button className="bg-emerald-600 hover:bg-emerald-500" onClick={submitDialog} disabled={busy}>
@@ -455,10 +624,10 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                 </DialogTitle>
               </DialogHeader>
               <Input
+                ref={inputRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && inputValue.trim() && submitDialog()}
-                autoFocus
                 placeholder={dialog.kind === 'zipOut' ? 'arsip.zip' : 'folder tujuan, mis. docs atau a/b (kosong = root)'}
                 className="bg-zinc-950 font-mono text-zinc-100 border-zinc-800"
               />
@@ -483,14 +652,16 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                     ? 'File baru'
                     : dialog.kind === 'newFolder'
                       ? 'Folder baru'
-                      : `Rename ${dialog.kind === 'rename' ? dialog.from.split('/').pop() : ''}`}
+                      : dialog.kind === 'rename'
+                        ? `Rename ${dialog.from.split('/').pop()}`
+                        : ''}
                 </DialogTitle>
               </DialogHeader>
               <Input
+                ref={inputRef}
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && inputValue.trim() && submitDialog()}
-                autoFocus
                 className="bg-zinc-950 border-zinc-800 font-mono"
               />
               <DialogFooter>
@@ -503,6 +674,43 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
               </DialogFooter>
             </>
           )}
+        </DialogContent>
+      </Dialog>
+
+      {/* dialog konfirmasi buang perubahan editor (di atas dialog edit) */}
+      <Dialog open={confirmDiscard} onOpenChange={(o) => { if (!o) setConfirmDiscard(false) }}>
+        <DialogContent className="w-[calc(100vw-2rem)] max-w-md bg-zinc-900 text-zinc-100 sm:rounded-lg">
+          <DialogHeader>
+            <DialogTitle className="break-all">Perubahan belum disimpan</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-zinc-400">
+            Teks udah diubah tapi belum disimpan. Kalau ditutup sekarang, semua perubahan hilang.
+          </p>
+          <DialogFooter className="flex-col gap-2 sm:flex-row">
+            <Button
+              variant="outline"
+              className="border-zinc-800 bg-zinc-950 text-red-300 hover:bg-red-950/40 hover:text-red-200"
+              onClick={() => { setConfirmDiscard(false); setDialog({ kind: 'none' }) }}
+              disabled={busy}
+            >
+              Buang perubahan
+            </Button>
+            <Button
+              variant="outline"
+              className="border-zinc-800 bg-zinc-950"
+              onClick={() => { setConfirmDiscard(false); setTimeout(() => editRef.current?.focus(), 120) }}
+              disabled={busy}
+            >
+              Lanjut edit
+            </Button>
+            <Button
+              className="bg-emerald-600 hover:bg-emerald-500"
+              onClick={() => { setConfirmDiscard(false); submitDialog() }}
+              disabled={busy}
+            >
+              {busy ? <Loader2 className="h-4 w-4 animate-spin" /> : 'Simpan'}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>

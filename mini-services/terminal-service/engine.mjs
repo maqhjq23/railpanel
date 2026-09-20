@@ -222,6 +222,8 @@ export function attachEngine(httpServer, opts = {}) {
     pingInterval: 25000,
     maxHttpBufferSize: 5 * 1024 * 1024,
   })
+  // opsional: path tambahan (dev — client next dev pakai path '/' via proxy XTransformPort)
+  if (opts.rootPath) io.attach(httpServer, { path: opts.rootPath, addTrailingSlash: false })
 
   io.use((socket, next) => {
     const cookies = parseCookies(socket.handshake.headers.cookie || '')

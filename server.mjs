@@ -13,7 +13,7 @@ const handle = app.getRequestHandler()
 await app.prepare()
 
 const httpServer = createServer((req, res) => handle(req, res))
-attachEngine(httpServer, { path: '/socket.io' })
+attachEngine(httpServer, { path: '/socket.io', rootPath: process.env.ENGINE_ROOT_PATH || undefined })
 
 httpServer.listen(port, hostname, () => {
   console.log(`RailPanel ready on http://${hostname}:${port}`)

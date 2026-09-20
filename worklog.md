@@ -376,3 +376,27 @@ Stage Summary:
 - Pilih (checkbox) + bar aksi Hapus/Move/Extract di bawah = jalan; extract = selalu konfirmasi dulu; auto-focus = semua dialog (edit/rename/new/zip/move); editor = nomor baris + guard data hilang
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Catatan: ENGINE_ROOT_PATH env opsional buat dev socket; script baru: none (reuse tp-e2e-test.mjs)
+
+---
+Task ID: 18
+Agent: Super Z (main)
+Task: Manager ronde 3 — hapus tombol Zip/Move di toolbar, fix fitur Move (gak berfungsi), preview Location di bawah input tujuan move (gaya Ptero)
+
+Work Log:
+- RONDE 3 permintaan user: (1) "hapus aja tombol Zip dan move... terkecuali yang ada di tombol select", (2) "perbaiki fitur movenya soalnya gak berfungsi", (3) "tambahkan location di bawah inputnya kaya di pterodactyl — di /home/contoh, input .. → location /home"
+- TOOLBAR: tombol Zip & Move di toolbar DIHAPUS (dulu cuma duplikat entry ke mode select). Toolbar sekarang: File, Folder, Upload, Pilih. Bar aksi mode select TETAP: Kompres, Move, Hapus, Extract, Batal (Archive/FolderInput import masih dipakai di situ)
+- ROOT CAUSE move gak berfungsi: dialog kirim dest MENTAH ke engine; handler files:move resolve dest terhadap ROOT server (safePath(base, dest)), bukan folder sekarang. Di /home/contoh ketik "docs" → engine cari <root>/docs → "Folder tujuan gak ada". Ketik ".." → path.resolve(base, "..") keluar base → safePath null → "Folder tujuan tidak valid". (Test lama 9/9 PASS karena test pakai dest dari root — semantics-nya beda dgn ekspektasi user)
+- FIX resolveDest() di file-explorer.tsx: input tujuan di-resolve gaya shell RELATIF terhadap cwd: ".." naik 1, "docs" turun, "/x" dari root server, kosong = root, clamp di root (gak bisa bocor keluar server). Hasil = path relatif dari root yang dikirim ke engine. + toast "Move sukses — N item dipindah ke /path" (dulu move sukses gak ada feedback)
+- LOCATION PREVIEW (gaya Ptero): di dialog Move, di bawah input ada "Location: /home" (font-mono, emerald, -mt-2 rapat ke input, truncate) — update live saat ngetik. Persis skenario user: di /home/contoh input ".." → Location: /home. Placeholder input baru: 'folder tujuan — ".." naik, "docs" di sini, kosong = root'
+- Test lokal: scripts/tp-move-resolve-test.mjs BARU — 18/18 PASS (contoh user "..", nested, absolut "/", clamp multi "..", sibling, trailing slash, "./", spasi dalam nama, "..x" = nama biasa); tsc --noEmit bersih
+- Deploy ca443361 SUCCESS (stream log gagal = pola biasa, poll GraphQL tp-poll-deploy.sh)
+- Verifikasi produksi: tp-files-test.mjs 9/9 PASS (zip/extract/move engine), tp-e2e-test.mjs 10/10 PASS
+- Browser smoke: toolbar 4 tombol (File/Folder/Upload/Pilih) — Zip & Move hilang ✓; Pilih → checkbox + bar aksi Kompres/Move/Hapus/Extract/Batal ✓; setup server "Tes Move UI" (home/contoh/a.txt+b.txt via scripts/tp-move-ui-setup.mjs BARU); di /home/contoh pilih a.txt → Move → ketik ".." → "Location: /home" tampil ✓ (screenshot download/rp-move-location.png) → klik Move → toast "Move sukses" ✓ → breadcrumb /home berisi contoh + a.txt (pindah beneran) ✓; cleanup scripts/tp-move-ui-cleanup.mjs — server test dihapus, panel tersisa DanzPro utuh
+- Commit: 84f9c71
+
+Stage Summary:
+- 3 permintaan ronde 3 selesai + terverifikasi produksi via engine test & browser
+- Move sekarang jalan dari folder mana pun (dest relatif folder sekarang, ".." didukung) + feedback toast + preview Location live
+- Toolbar bersih: File/Folder/Upload/Pilih; aksi Zip/Move tinggal di bar aksi mode select
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Script baru: tp-move-resolve-test.mjs, tp-move-ui-setup.mjs, tp-move-ui-cleanup.mjs

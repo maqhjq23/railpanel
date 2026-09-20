@@ -351,3 +351,28 @@ Stage Summary:
 - Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
 - Script baru: tp-files-test.mjs, tp-upload-check.mjs
 - Catatan: config.json Railway = key PATH DIR + LinkedProject flat (lihat src/config.rs v4.5.4)
+
+---
+Task ID: 17
+Agent: Super Z (main)
+Task: Manager ronde 2 — select umum + bar aksi (Hapus/Move/Extract), konfirmasi extract, auto-focus dialog, editor nomor baris + guard "belum disimpan"
+
+Work Log:
+- Konteks: Task 16 (upload fix, tombol per-item, Zip/Move laci, editor overflow) SUDAH live (deploy 94618d54) — worklog entry Task 16 lengkap
+- file-explorer.tsx rewrite: SelMode disederhanakan 'none'|'sel' — tombol Pilih BARU + Zip + Move = 3 entry ke mode select yang sama; bar aksi bawah sekarang: Kompres, Move, Hapus, Extract, Batal (flex-wrap, disabled logic per aksi: extract butuh >=1 zip terpilih)
+- DialogMode baru: {kind:'extract', from?} (from=single per-item, tanpa=massal dari sel) + {kind:'delSel'} (hapus massal); submitDialog loop RPC files:extract/files:delete per item + toast partial sukses (X/N)
+- EXTRACT SEKARANG SELALU lewat dialog konfirmasi (per-item & massal) — dulu langsung eksekusi; teks dialog: "isi arsip di-extract ke folder ini, nama sama ke-overwrite"
+- AUTO-FOCUS: useEffect + ref + setTimeout(120ms) — Radix Dialog fokusnya ke tombol X dulu (React autoFocus gak menang lawan focus-trap); edit -> textarea fokus; rename -> input fokus + select() SEMUA teks (tinggal ketik); newFile/newFolder/zipOut/moveTo -> input fokus
+- EDITOR DIRTY GUARD: state origContent; closeMain() intercept Tutup/ESC/overlay -> kalau editContent !== origContent -> nested Dialog "Perubahan belum disimpan" [Buang perubahan][Lanjut edit][Simpan]; Simpan = submitDialog branch edit (write + close); ESC dialog kedua = kembali
+- EDITOR NOMOR BARIS (gaya Ptero): gutter w-12 virtualized (ROW_H=20px, render cuma baris visible + buffer via onScroll) + textarea wrap="off" whitespace-pre (no-wrap, scroll horizontal DALAM textarea — fix overflow Task 16 tetap terpenuhi); gutter.scrollTop disinkron dari textarea onScroll; lineHeight/fontSize eksplisit sama keduanya (20px/12px) biar align pasti; lineCount = split('\n')
+- TS fixes: import type UIEvent dari react (bukan React UMD global); dep array useEffect pakai dlgFrom ('from' in dialog narrowing)
+- Dev bug bonus: server.mjs socket.io path '/socket.io' vs client dev path '/' (via proxy XTransformPort) gak match -> attachEngine opts.rootPath opsional (io.attach kedua, hanya aktif kalau env ENGINE_ROOT_PATH diset — produksi gak kepengaruh, dibuktikan e2e)
+- Deploy: 540474f4-5c64-4806-88f7-4829605512ef SUCCESS (stream log gagal = pola biasa, poll GraphQL)
+- Verifikasi produksi: e2e 10/10 PASS; browser smoke LENGKAP (login, server test "Tes Manager UI"): toolbar 6 tombol; dialog File baru autofocus INPUT (document.activeElement); mode Pilih -> checkbox + bar aksi (Extract disabled saat 0 zip); Kompres 2 file -> arsip.zip (autofocus input, default arsip.zip); Extract per-item -> dialog "Extract arsip.zip?" -> eksekusi OK; editor: autofocus TEXTAREA, nomor baris 1,2,3 align sempurna, ketik 3 baris -> Simpan -> buka ulang konten utuh; dirty + Tutup/ESC -> dialog "Perubahan belum disimpan" -> Lanjut edit (utuh) / Buang (tutup); Rename -> INPUT fokus + selection 9 char (semua nama ke-select); Hapus massal 2 item -> dialog "Hapus 2 item terpilih?" -> sukses; Extract massal -> dialog "Extract 1 arsip terpilih?" -> OK; server test dihapus, panel DanzPro utuh
+- Screenshot: download/rp-select-mode.png, rp-extract-confirm.png, rp-editor-line-numbers.png, rp-editor-discard.png, rp-del-confirm.png
+
+Stage Summary:
+- Semua permintaan ronde 2 selesai + terverifikasi produksi via browser
+- Pilih (checkbox) + bar aksi Hapus/Move/Extract di bawah = jalan; extract = selalu konfirmasi dulu; auto-focus = semua dialog (edit/rename/new/zip/move); editor = nomor baris + guard data hilang
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Catatan: ENGINE_ROOT_PATH env opsional buat dev socket; script baru: none (reuse tp-e2e-test.mjs)

@@ -11,8 +11,9 @@
 //   .zip = extract — extract SELALU lewat dialog konfirmasi dulu.
 // - Editor: gutter nomor baris (virtualized, sinkron scroll) + textarea
 //   no-wrap (teks panjang scroll horizontal, gak nembus batas) +
-//   guard "perubahan belum disimpan" kalau ditutup dalam kondisi dirty +
-//   auto-focus keyboard.
+//   guard "perubahan belum disimpan" kalau ditutup dalam kondisi dirty.
+// - GAK ada auto-focus: dialog kebuka gak dipaksa fokus ke input/textarea
+//   (keyboard HP gak muncul sendiri). Fokus cuma lewat klik manual.
 import { useCallback, useEffect, useRef, useState, type UIEvent as ReactUIEvent } from 'react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -104,23 +105,9 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     load(cwd)
   }, [cwd])
 
-  const dlgFrom = 'from' in dialog ? dialog.from : undefined
-
-  // auto-focus: Radix dialog fokusnya ke tombol close X duluan, jadi kita
-  // paksa fokus manual ke input/textarea setelah dialog kebuka.
-  useEffect(() => {
-    const k = dialog.kind
-    if (k === 'none') return
-    const t = setTimeout(() => {
-      if (k === 'edit') {
-        editRef.current?.focus()
-      } else if (k === 'newFile' || k === 'newFolder' || k === 'rename' || k === 'zipOut' || k === 'moveTo') {
-        inputRef.current?.focus()
-        if (k === 'rename') inputRef.current?.select() // nama lama ke-highlight semua
-      }
-    }, 120)
-    return () => clearTimeout(t)
-  }, [dialog.kind, dlgFrom])
+  // SENGAJA gak ada auto-focus: dulu dialog kebuka langsung fokus ke input/textarea
+  // → keyboard HP langsung muncul nutupin setengah layar. Fokus cuma lewat klik manual
+  // (mis. "Lanjut edit" di dialog discard).
 
   function join(dir: string, name: string) {
     return dir === '.' ? name : `${dir}/${name}`
@@ -253,8 +240,9 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         // Dulu dikirim mentah -> engine anggap dari root -> "Folder tujuan gak ada".
         const dest = resolveDest(inputValue, cwd)
         const n = sel.size
-        await rpc(socket, 'files:move', { id: serverId, items: Array.from(sel), dest })
-        toast({ title: 'Move sukses', description: `${n} item dipindah ke ${dest === '.' ? 'root' : '/' + dest}` })
+        const res = await rpc<{ moved?: number; renamed?: string[] }>(socket, 'files:move', { id: serverId, items: Array.from(sel), dest })
+        const ren = res.renamed?.length ? ` · di-rename: ${res.renamed.join(', ')}` : ''
+        toast({ title: 'Move sukses', description: `${n} item dipindah ke ${dest === '.' ? 'root' : '/' + dest}${ren}` })
         enterSelect('none')
       }
       setDialog({ kind: 'none' })
@@ -535,7 +523,12 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
 
       {/* dialog utama: newFile/newFolder/rename/delete/delSel/edit/extract/zipOut/moveTo */}
       <Dialog open={dialog.kind !== 'none'} onOpenChange={(o) => { if (!o) closeMain() }}>
-        <DialogContent className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden bg-zinc-900 text-zinc-100 sm:max-w-2xl">
+        {/* onOpenAutoFocus di-prevent: fokus bawaan Radix nyasar ke textarea/input
+            (elemen fokusabel pertama) → keyboard HP langsung muncul pas dialog kebuka */}
+        <DialogContent
+          onOpenAutoFocus={(e) => e.preventDefault()}
+          className="w-[calc(100vw-2rem)] max-w-[calc(100vw-2rem)] overflow-hidden bg-zinc-900 text-zinc-100 sm:max-w-2xl"
+        >
           {dialog.kind === 'delete' || dialog.kind === 'delSel' ? (
             <>
               <DialogHeader>
@@ -581,7 +574,7 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
           ) : dialog.kind === 'edit' ? (
             <>
               <DialogHeader>
-                <DialogTitle className="break-all font-mono text-sm">/{dialog.from}</DialogTitle>
+                <DialogTitle className="break-all font-mono text-base">{dialog.from}</DialogTitle>
               </DialogHeader>
               <div className="flex h-[55vh] min-h-[300px] w-full overflow-hidden rounded-md border border-zinc-800 bg-zinc-950 focus-within:border-emerald-700">
                 {/* gutter nomor baris — scrollTop disinkron dari textarea */}

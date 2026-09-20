@@ -435,6 +435,19 @@ export function attachEngine(httpServer, opts = {}) {
       }
     })
 
+    // cari nama file/folder bebas di dir: "name (1)", "name (2)" ... (dipakai move
+    // kalau di tujuan udah ada nama yang sama — mis. file "test" dinaikin ke /home
+    // yang kebetulan udah punya FOLDER "test" → jangan error, rename "test (1)")
+    async function freeName(dir, name) {
+      const ext = path.extname(name)
+      const stem = ext ? name.slice(0, -ext.length) : name
+      for (let i = 1; i < 1000; i++) {
+        const cand = path.join(dir, `${stem} (${i})${ext}`)
+        if (!(await fsp.stat(cand).catch(() => null))) return cand
+      }
+      return null
+    }
+
     socket.on('files:move', async ({ id, items, dest }, cb) => {
       try {
         const base = path.resolve(serverDir(id))
@@ -444,11 +457,19 @@ export function attachEngine(httpServer, opts = {}) {
         if (!dst || !dst.isDirectory()) return cb({ ok: false, error: 'Folder tujuan gak ada' })
         if (!Array.isArray(items) || !items.length) return cb({ ok: false, error: 'Pilih item dulu' })
         let moved = 0
+        const renamed = []
         for (const it of items) {
           const t = safePath(id, String(it))
           if (!t || t === base) return cb({ ok: false, error: 'Item tidak valid: ' + it })
           if (destP === t || destP.startsWith(t + path.sep)) return cb({ ok: false, error: 'Gak bisa mindahin folder ke dalam dirinya sendiri' })
-          const target = path.join(destP, path.basename(t))
+          let target = path.join(destP, path.basename(t))
+          if (target !== t && (await fsp.stat(target).catch(() => null))) {
+            // bentrok nama di tujuan → auto-rename "nama (1)" (keep both), bukan error
+            const free = await freeName(destP, path.basename(t))
+            if (!free) return cb({ ok: false, error: `Gak ada nama bebas buat ${path.basename(t)}` })
+            renamed.push(`${path.basename(t)} → ${path.basename(free)}`)
+            target = free
+          }
           if (target === t) { moved++; continue }
           try {
             await fsp.rename(t, target)
@@ -462,7 +483,7 @@ export function attachEngine(httpServer, opts = {}) {
           }
           moved++
         }
-        cb({ ok: true, moved })
+        cb({ ok: true, moved, renamed })
       } catch (err) {
         cb({ ok: false, error: err.message })
       }

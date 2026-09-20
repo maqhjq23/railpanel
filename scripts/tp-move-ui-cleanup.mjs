@@ -11,7 +11,7 @@ s.on('connect_error', (e) => { console.log('[FAIL] connect:', e.message); proces
 s.on('connect', async () => {
   try {
     const servers = await rpc('servers:list', {})
-    for (const sv of servers.filter((x) => x.name === 'Tes Move UI')) {
+    for (const sv of servers.filter((x) => x.name.startsWith('Tes Move'))) {
       await rpc('servers:delete', { id: sv.id })
       console.log('[OK] dihapus:', sv.id)
     }

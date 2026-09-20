@@ -2,8 +2,11 @@
 
 // FileExplorer — file manager RailPanel.
 // - Toolbar gaya "laci": bisa digeser horizontal kalau muat gak (HP).
-// - Mode select (checkbox per item): Pilih / Zip / Move masuk mode yang sama;
+// - Mode select (checkbox per item): tombol Pilih masuk mode yang sama;
 //   bar aksi di bawahnya: Kompres, Move, Hapus, Extract + Batal.
+// - Move: folder tujuan di-resolve gaya shell RELATIF terhadap folder sekarang
+//   (".." naik, "docs" di sini, "/x" dari root) + preview Location di bawah input —
+//   dulu dest dikirim mentah (dianggap dari root) makanya move sering gagal.
 // - Tombol per item: file = edit/download/rename/hapus, folder = rename/hapus,
 //   .zip = extract — extract SELALU lewat dialog konfirmasi dulu.
 // - Editor: gutter nomor baris (virtualized, sinkron scroll) + textarea
@@ -123,6 +126,21 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
     return dir === '.' ? name : `${dir}/${name}`
   }
 
+  // resolve input folder tujuan gaya shell, RELATIF terhadap folder sekarang:
+  // ".." naik 1 level, "docs/a" turun, "/x" = dari root server, kosong = root.
+  // Hasil = path relatif dari root server ('.' = root) — selalu di dalam server.
+  function resolveDest(input: string, cwdRel: string): string {
+    const raw = input.trim()
+    if (raw === '') return '.'
+    const cur = raw.startsWith('/') ? [] : cwdRel === '.' ? [] : cwdRel.split('/')
+    for (const seg of raw.split('/')) {
+      if (seg === '' || seg === '.') continue
+      if (seg === '..') cur.pop()
+      else cur.push(seg)
+    }
+    return cur.length ? cur.join('/') : '.'
+  }
+
   // pindah folder SELALU lewat sini biar mode select ke-reset (gak boleh di effect body)
   function go(dir: string) {
     setSelMode('none')
@@ -231,8 +249,12 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
         await rpc(socket, 'files:zip', { id: serverId, items: Array.from(sel), out: join(cwd, inputValue) })
         enterSelect('none') // reset mode + seleksi
       } else if (dialog.kind === 'moveTo') {
-        const dest = inputValue.trim() === '' ? '.' : inputValue.trim()
+        // dest di-resolve relatif terhadap folder sekarang (".." naik, dst).
+        // Dulu dikirim mentah -> engine anggap dari root -> "Folder tujuan gak ada".
+        const dest = resolveDest(inputValue, cwd)
+        const n = sel.size
         await rpc(socket, 'files:move', { id: serverId, items: Array.from(sel), dest })
+        toast({ title: 'Move sukses', description: `${n} item dipindah ke ${dest === '.' ? 'root' : '/' + dest}` })
         enterSelect('none')
       }
       setDialog({ kind: 'none' })
@@ -280,6 +302,9 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
   const selPaths = Array.from(sel)
   const selZip = selPaths.filter((p) => isZipPath(p))
   const lineCount = dialog.kind === 'edit' ? Math.max(1, editContent.split('\n').length) : 1
+  // preview lokasi tujuan move (gaya Ptero): ".." dari /home/contoh -> /home
+  const moveResolved = dialog.kind === 'moveTo' ? resolveDest(inputValue, cwd) : null
+  const moveLoc = moveResolved ? '/' + (moveResolved === '.' ? '' : moveResolved) : ''
 
   return (
     <div className="space-y-3">
@@ -329,22 +354,6 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
             onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
           >
             <ListChecks className="h-4 w-4" /> Pilih
-          </Button>
-          <Button
-            variant={selecting ? 'default' : 'outline'}
-            size="sm"
-            className={selecting ? btnSel : btnBar}
-            onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
-          >
-            <Archive className="h-4 w-4" /> Zip
-          </Button>
-          <Button
-            variant={selecting ? 'default' : 'outline'}
-            size="sm"
-            className={selecting ? btnSel : btnBar}
-            onClick={() => (selecting ? enterSelect('none') : enterSelect('sel'))}
-          >
-            <FolderInput className="h-4 w-4" /> Move
           </Button>
           <input
             ref={uploadRef}
@@ -628,9 +637,14 @@ export default function FileExplorer({ socket, serverId }: { socket: any; server
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={(e) => e.key === 'Enter' && inputValue.trim() && submitDialog()}
-                placeholder={dialog.kind === 'zipOut' ? 'arsip.zip' : 'folder tujuan, mis. docs atau a/b (kosong = root)'}
+                placeholder={dialog.kind === 'zipOut' ? 'arsip.zip' : 'folder tujuan — ".." naik, "docs" di sini, kosong = root'}
                 className="bg-zinc-950 font-mono text-zinc-100 border-zinc-800"
               />
+              {dialog.kind === 'moveTo' && (
+                <p className="-mt-2 truncate font-mono text-xs text-zinc-500">
+                  Location: <span className="text-emerald-400">{moveLoc}</span>
+                </p>
+              )}
               <DialogFooter>
                 <Button variant="outline" className="border-zinc-800 bg-zinc-950" onClick={() => setDialog({ kind: 'none' })}>
                   Batal

@@ -2,8 +2,9 @@
 import { io } from 'socket.io-client'
 import fs from 'fs'
 
-const cookieLine = fs.readFileSync('/tmp/tp_cookie.txt', 'utf8').split('\n').find((l) => l.includes('tp_token'))
-const token = process.env.RP_TOKEN || cookieLine.trim().split(/\s+/).pop()
+const token = process.env.RP_TOKEN || (fs.existsSync('/tmp/tp_cookie.txt')
+  ? fs.readFileSync('/tmp/tp_cookie.txt', 'utf8').split('\n').find((l) => l.includes('tp_token')).trim().split(/\s+/).pop()
+  : '')
 const URL = process.env.RP_URL || 'http://127.0.0.1:3003'
 
 function fail(msg) {

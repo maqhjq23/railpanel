@@ -328,3 +328,26 @@ Stage Summary:
 - Isi = kondisi terbaru: fix console newline (Task 14) + semua Task sebelumnya
 - PERINGATAN: arsip mengandung kredensial (.env, worklog: token Railway, password panel, token gofile) -> link JANGAN disebar
 - Backup lama masih ada: https://gofile.io/d/IzRIXtuP (2.0 MB, kondisi Task 11)
+
+---
+Task ID: 16
+Agent: Super Z (main)
+Task: Fix 4 bug/fitur File Manager: upload error, tombol per-item, Zip+Move multi-select (toolbar laci), editor overflow
+
+Work Log:
+- BUG 1 (upload): root cause = route /api/files/upload TIDAK PERNAH ADA (fetch 404). Fix: route baru src/app/api/files/upload/route.ts — auth cookie sama download, cek server exist via store.json, safePath, nama file di-sanitize (basename + control char), stream via Readable.fromWeb->pipeline (gak load full di RAM), limit 200MB/file & 20 file/request, overwrite=ya
+- BUG 2 (tombol per-item): file = Edit (SquarePen) + Download + Rename + Hapus; folder = Rename + Hapus; .zip = Extract (FolderOutput) + tombol file standar. Semua selalu tampak (gak perlu hover — HP friendly). Edit pakai dialog editor yang sama dgn klik file
+- BUG 3 (Zip & Move + laci): toolbar baru File/Folder/Upload/Zip/Move dalam container overflow-x-auto (laci bisa digeser, scrollbar tipis, tombol shrink-0). Mode select: selMode 'zip'|'move' + Set path terpilih; kolom ikon jadi Checkbox (pointer-events-none, toggle via row click); bar aksi "N dipilih" + Batal + Kompres/Move. Zip -> dialog nama arsip (default arsip.zip) -> files:zip; Move -> dialog folder tujuan (kosong=root) -> files:move. Pindah folder SELALU via go() biar select ke-reset (react-hooks rule: gak boleh set state di effect body)
+- BUG 4 (editor): DialogContent w-[calc(100vw-2rem)] max-w viewport overflow-hidden; title break-all; textarea wrap="soft" + whitespace-pre-wrap + break-all + min-w-0 + leading-relaxed -> teks 3000+ char ke-wrap (bukti: 98 visual lines, dialog tetap 672px, body gak ada h-overflow)
+- ENGINE: handler baru files:extract (unzip -o, fallback python3 -m zipfile -e), files:zip (zip -r -q relative path dari root server, hapus out lama dulu, fallback python3 -m zipfile -c), files:move (rename atomic, EXDEV fallback cp+rm, reject move folder ke dalam dirinya, dest harus folder existing) + helper runCmd (timeout 90s, capture out/err 8KB, flag missing utk ENOENT)
+- Deploy: CLI hilang lagi (sandbox reset home) -> reinstall v4.5.4 musl; config.json dibikin dari SOURCE CLI v4.5.4 (src/config.rs): key projects = PATH DIRECTORY (bukan project id!), LinkedProject {projectPath, project, environment, service} camelCase. RAILWAY_TOKEN env GAK dipakai CLI utk account token (hanya project token)
+- Deploy 94618d54 SUCCESS
+- Verifikasi produksi: tp-files-test.mjs (zip/extract/move + 3 edge case) 9/9 PASS; tp-upload-check.mjs BARU (3 file multi, isi teks utuh, binary 100KB size+MD5 upload=download identik, subfolder, 401 tanpa login, 404 server ngawur) 9/9 PASS; e2e 10/10 PASS
+- Browser smoke: login, panel test "Tes File Manager" dibuat, toolbar 5 tombol tampil, mode Zip nampilin Batal+Kompres (disabled saat 0 pilihan), tombol per-item tampil (Edit/Download/Rename/Hapus), editor wrap OK (screenshot download/rp-editor-fixed.png + rp-manager-toolbar.png); panel test dihapus, panel DanzPro utuh
+
+Stage Summary:
+- 4 permintaan user selesai + terverifikasi produksi
+- Upload: stream, 200MB/file, sanitasi nama, auth — MD5 verified
+- Live: https://railpanel-production-a69c.up.railway.app (password Rpf6a7ea96)
+- Script baru: tp-files-test.mjs, tp-upload-check.mjs
+- Catatan: config.json Railway = key PATH DIR + LinkedProject flat (lihat src/config.rs v4.5.4)

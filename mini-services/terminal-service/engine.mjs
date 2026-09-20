@@ -373,6 +373,99 @@ export function attachEngine(httpServer, opts = {}) {
       }
     })
 
+    // ---- files: arsip (extract/zip) & pindah (multi-select) ----
+    function runCmd(cmd, args, cwd, timeoutMs = 90000) {
+      return new Promise((resolve) => {
+        const p = spawn(cmd, args, { cwd, env: { ...process.env, HOME: cwd } })
+        let out = ''
+        let err = ''
+        let done = false
+        const finish = (res) => { if (!done) { done = true; clearTimeout(t); resolve(res) } }
+        const t = setTimeout(() => { try { p.kill('SIGKILL') } catch {}; finish({ ok: false, error: 'Proses timeout' }) }, timeoutMs)
+        p.stdout.on('data', (d) => { out += d; if (out.length > 8000) out = out.slice(-8000) })
+        p.stderr.on('data', (d) => { err += d; if (err.length > 8000) err = err.slice(-8000) })
+        p.on('error', (e) => finish({ ok: false, error: e.message, missing: e.code === 'ENOENT' }))
+        p.on('close', (code) => finish({ ok: code === 0, code, out: out.trim(), err: err.trim() }))
+      })
+    }
+
+    socket.on('files:extract', async ({ id, path: rel }, cb) => {
+      try {
+        const base = path.resolve(serverDir(id))
+        const target = safePath(id, rel)
+        if (!target || target === base) return cb({ ok: false, error: 'Path tidak valid' })
+        const st = await fsp.stat(target).catch(() => null)
+        if (!st || st.isDirectory()) return cb({ ok: false, error: 'Bukan file zip' })
+        if (!/\.zip$/i.test(target)) return cb({ ok: false, error: 'Ekstensi harus .zip' })
+        const dir = path.dirname(target)
+        let r = await runCmd('unzip', ['-o', target, '-d', dir], dir)
+        if (r.missing) r = await runCmd('python3', ['-m', 'zipfile', '-e', target, dir], dir)
+        if (!r.ok) return cb({ ok: false, error: (r.err || r.error || 'Extract gagal').slice(0, 300) })
+        cb({ ok: true })
+      } catch (err) {
+        cb({ ok: false, error: err.message })
+      }
+    })
+
+    socket.on('files:zip', async ({ id, items, out }, cb) => {
+      try {
+        const base = path.resolve(serverDir(id))
+        const outP = safePath(id, String(out || ''))
+        if (!outP || outP === base) return cb({ ok: false, error: 'Nama arsip tidak valid' })
+        if (!/\.zip$/i.test(outP)) return cb({ ok: false, error: 'Nama arsip harus berakhiran .zip' })
+        if (!Array.isArray(items) || !items.length) return cb({ ok: false, error: 'Pilih file/folder dulu' })
+        const rels = []
+        for (const it of items) {
+          const t = safePath(id, String(it))
+          if (!t || t === base) return cb({ ok: false, error: 'Item tidak valid: ' + it })
+          rels.push(path.relative(base, t))
+        }
+        await fsp.rm(outP, { force: true })
+        let r = await runCmd('zip', ['-r', '-q', path.relative(base, outP), ...rels], base)
+        if (r.missing) r = await runCmd('python3', ['-m', 'zipfile', '-c', path.relative(base, outP), ...rels], base)
+        if (!r.ok) {
+          await fsp.rm(outP, { force: true }).catch(() => {})
+          return cb({ ok: false, error: (r.err || r.error || 'Kompres gagal').slice(0, 300) })
+        }
+        cb({ ok: true })
+      } catch (err) {
+        cb({ ok: false, error: err.message })
+      }
+    })
+
+    socket.on('files:move', async ({ id, items, dest }, cb) => {
+      try {
+        const base = path.resolve(serverDir(id))
+        const destP = safePath(id, String(dest || ''))
+        if (!destP) return cb({ ok: false, error: 'Folder tujuan tidak valid' })
+        const dst = await fsp.stat(destP).catch(() => null)
+        if (!dst || !dst.isDirectory()) return cb({ ok: false, error: 'Folder tujuan gak ada' })
+        if (!Array.isArray(items) || !items.length) return cb({ ok: false, error: 'Pilih item dulu' })
+        let moved = 0
+        for (const it of items) {
+          const t = safePath(id, String(it))
+          if (!t || t === base) return cb({ ok: false, error: 'Item tidak valid: ' + it })
+          if (destP === t || destP.startsWith(t + path.sep)) return cb({ ok: false, error: 'Gak bisa mindahin folder ke dalam dirinya sendiri' })
+          const target = path.join(destP, path.basename(t))
+          if (target === t) { moved++; continue }
+          try {
+            await fsp.rename(t, target)
+          } catch (e) {
+            if (e.code === 'EXDEV') {
+              await fsp.cp(t, target, { recursive: true })
+              await fsp.rm(t, { recursive: true, force: true })
+            } else {
+              return cb({ ok: false, error: `Gagal pindah ${path.basename(t)}: ${e.message}` })
+            }
+          }
+          moved++
+        }
+        cb({ ok: true, moved })
+      } catch (err) {
+        cb({ ok: false, error: err.message })
+      }
+    })
+
     // ---- terminal ----
     socket.on('terminal:attach', ({ id }, cb) => {
       if (!findServer(id)) return cb({ ok: false, error: 'Server tidak ditemukan' })

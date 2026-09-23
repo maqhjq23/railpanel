@@ -33,37 +33,13 @@ export default function SettingsView({
 }) {
   const [name, setName] = useState(server.name)
   const [description, setDescription] = useState(server.description)
-  const [envText, setEnvText] = useState(
-    Object.entries(server.env || {})
-      .map(([k, v]) => `${k}=${v}`)
-      .join('\n'),
-  )
   const [saving, setSaving] = useState(false)
   const { toast } = useToast()
 
   useEffect(() => {
     setName(server.name)
     setDescription(server.description || '')
-    setEnvText(
-      Object.entries(server.env || {})
-        .map(([k, v]) => `${k}=${v}`)
-        .join('\n'),
-    )
   }, [server])
-
-  function parseEnv(text: string): Record<string, string> {
-    const out: Record<string, string> = {}
-    for (const line of text.split('\n')) {
-      const trimmed = line.trim()
-      if (!trimmed || trimmed.startsWith('#')) continue
-      const idx = trimmed.indexOf('=')
-      if (idx === -1) continue
-      const k = trimmed.slice(0, idx).trim()
-      const v = trimmed.slice(idx + 1).trim()
-      if (k) out[k] = v
-    }
-    return out
-  }
 
   async function save() {
     setSaving(true)
@@ -72,7 +48,6 @@ export default function SettingsView({
         id: server.id,
         name,
         description,
-        env: parseEnv(envText),
       })
       toast({ title: 'Tersimpan' })
       onUpdated(res.server)
@@ -121,25 +96,6 @@ export default function SettingsView({
               className="h-20 w-full resize-none rounded-md border border-zinc-800 bg-zinc-950 p-3 text-sm text-zinc-200 outline-none focus:border-emerald-700"
             />
           </div>
-        </CardContent>
-      </Card>
-
-      <Card className="border-zinc-800 bg-zinc-900">
-        <CardHeader>
-          <CardTitle className="text-base">Environment variables</CardTitle>
-          <CardDescription>
-            Berlaku buat terminal panel ini. Format satu per baris: KEY=value.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <textarea
-            id="set-env"
-            value={envText}
-            onChange={(e) => setEnvText(e.target.value)}
-            spellCheck={false}
-            placeholder={'TOKEN=abc123\nDEBUG=1'}
-            className="h-32 w-full resize-none rounded-md border border-zinc-800 bg-zinc-950 p-3 font-mono text-xs text-zinc-200 outline-none focus:border-emerald-700"
-          />
           <Button onClick={save} disabled={saving} className="bg-emerald-600 hover:bg-emerald-500">
             {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Save className="h-4 w-4" />} Simpan
           </Button>
